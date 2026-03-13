@@ -93,7 +93,7 @@ type Processor struct {
 	queue            chan workUnit
 	workerCount      int
 	workingDirectory string
-	wg               sync.WaitGroup
+	queueWg          sync.WaitGroup
 	log              Logger
 	detectFunc       DetectFunc
 	buildMetadata    BuildMetadataFunc
@@ -112,9 +112,9 @@ func NewProcessor(ctx context.Context, log Logger, queueSize, workerCount int, w
 		detectFunc:       detectFunc,
 		buildMetadata:    buildMeta,
 	}
-	p.wg.Add(1)
+	p.queueWg.Add(1)
 	go func() {
-		defer p.wg.Done()
+		defer p.queueWg.Done()
 		for wu := range p.queue {
 			p.processFile(ctx, wu)
 		}
@@ -139,7 +139,7 @@ func (p *Processor) Stop() {
 
 // Wait blocks until all queued files have been processed.
 func (p *Processor) Wait() {
-	p.wg.Wait()
+	p.queueWg.Wait()
 }
 
 // processFile handles a single file from the queue.
@@ -158,7 +158,16 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 	wu.eventSink.Starting(outMeta)
 
 	// 2. Open file with BOM stripping, read headers
-	headers, err := p.readHeaders(wu.file.LocalFilePath)
+	inFile, err := os.Open(wu.file.LocalFilePath)
+	if err != nil {
+		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("opening file: %w", err))
+		return
+	}
+	defer inFile.Close()
+
+	bomReader := utfbom.SkipOnly(inFile)
+	csvReader := csv.NewReader(bomReader)
+	headers, err := readHeaders(csvReader)
 	if err != nil {
 		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("reading headers: %w", err))
 		return
@@ -174,12 +183,15 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 
 	outMeta.CSVType = handler.Type()
 
-	// 4. Count total data rows (excluding header)
-	totalRows, err := countDataRows(wu.file.LocalFilePath)
+	// 4. Count total data rows using the already-positioned CSV reader.
+	// This consumes the rest of the file; the feeder will re-open it.
+	totalRows, err := countCSVRows(csvReader)
 	if err != nil {
 		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("counting rows: %w", err))
 		return
 	}
+	// Done with the input file for counting; close it now.
+	inFile.Close()
 
 	progress.TotalRows = totalRows
 
@@ -196,6 +208,7 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 	headerLine := quoteHeaders(handler.OutputHeaders())
 	if _, err := outWriter.WriteString(headerLine + "\n"); err != nil {
 		outFile.Close()
+		os.Remove(outMeta.OutPath)
 		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("writing headers: %w", err))
 		return
 	}
@@ -232,9 +245,26 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		}()
 	}
 
-	// Launch feeder goroutine
+	// Launch feeder goroutine: re-open file, BOM-strip, skip header line, then feed rows.
+	// The reader passed to CSVToChanMaps is already positioned after the header.
 	go func() {
-		err := CSVToChanMaps(procCtx, wu.file.LocalFilePath, headers, inputCh)
+		f, err := os.Open(wu.file.LocalFilePath)
+		if err != nil {
+			p.log.Printf("feeder open error: %v", err)
+			close(inputCh)
+			return
+		}
+		defer f.Close()
+
+		br := bufio.NewReader(utfbom.SkipOnly(f))
+		// Skip header line so reader is positioned at first data row
+		if _, err := br.ReadString('\n'); err != nil {
+			p.log.Printf("feeder header skip error: %v", err)
+			close(inputCh)
+			return
+		}
+
+		err = CSVToChanMaps(procCtx, br, headers, inputCh)
 		if err != nil && err != context.Canceled {
 			p.log.Printf("feeder error: %v", err)
 		}
@@ -283,19 +313,15 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 
 	if processingErr == nil {
 		wu.eventSink.Success(outMeta)
+	} else if outMeta.OutPath != "" {
+		// Clean up partial output file on failure
+		os.Remove(outMeta.OutPath)
 	}
 }
 
-// readHeaders opens a file with BOM stripping and reads the first CSV row as headers.
-func (p *Processor) readHeaders(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	reader := csv.NewReader(utfbom.SkipOnly(f))
-	headers, err := reader.Read()
+// readHeaders reads the first CSV row from a csv.Reader as headers.
+func readHeaders(r *csv.Reader) ([]string, error) {
+	headers, err := r.Read()
 	if err != nil {
 		return nil, fmt.Errorf("reading CSV headers: %w", err)
 	}
@@ -306,57 +332,39 @@ func (p *Processor) readHeaders(path string) ([]string, error) {
 	return headers, nil
 }
 
-// countDataRows counts lines in the file excluding the header line.
-func countDataRows(path string) (int, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
+// countCSVRows counts remaining CSV records from a reader already positioned after the header.
+func countCSVRows(r *csv.Reader) (int, error) {
 	count := 0
-	for scanner.Scan() {
+	for {
+		_, err := r.Read()
+		if err == io.EOF {
+			return count, nil
+		}
+		if err != nil {
+			return 0, err
+		}
 		count++
 	}
-	if err := scanner.Err(); err != nil {
-		return 0, err
-	}
-	// Subtract header line
-	if count > 0 {
-		count--
-	}
-	return count, nil
 }
 
 // quoteHeaders formats output headers as a CSV header row (each quoted).
 func quoteHeaders(headers []string) string {
 	var buf strings.Builder
 	w := csv.NewWriter(&buf)
+	// csv.Writer.Write to a strings.Builder cannot fail (Builder.Write never returns an error);
+	// any OOM would panic, not return an error. Safe to ignore.
 	_ = w.Write(headers)
 	w.Flush()
 	return strings.TrimRight(buf.String(), "\n")
 }
 
-// CSVToChanMaps reads a CSV file (with BOM stripping), skips the header row,
+// CSVToChanMaps reads CSV data from reader (already BOM-stripped, positioned after the header)
 // and sends each data row as a RowData on the out channel.
 // It closes the out channel when done.
-func CSVToChanMaps(ctx context.Context, filePath string, headers []string, out chan<- RowData) error {
+func CSVToChanMaps(ctx context.Context, reader io.Reader, headers []string, out chan<- RowData) error {
 	defer close(out)
 
-	f, err := os.Open(filePath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	reader := csv.NewReader(utfbom.SkipOnly(f))
-
-	// Skip header row
-	if _, err := reader.Read(); err != nil {
-		return fmt.Errorf("skipping header: %w", err)
-	}
-
+	csvReader := csv.NewReader(reader)
 	rowIndex := 1
 	for {
 		select {
@@ -365,7 +373,7 @@ func CSVToChanMaps(ctx context.Context, filePath string, headers []string, out c
 		default:
 		}
 
-		record, err := reader.Read()
+		record, err := csvReader.Read()
 		if err == io.EOF {
 			return nil
 		}

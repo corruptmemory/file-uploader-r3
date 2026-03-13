@@ -196,15 +196,19 @@ func TestRowErrorsFormat(t *testing.T) {
 // --- CSVToChanMaps Tests ---
 
 func TestCSVToChanMapsCorrectRowCount(t *testing.T) {
-	dir := t.TempDir()
-	path := writeCasinoParSheetCSV(t, dir, 10)
+	// Build CSV data without header (CSVToChanMaps expects reader positioned after header)
+	var buf strings.Builder
+	for i := 1; i <= 10; i++ {
+		buf.WriteString(fmt.Sprintf("MACH%03d,%d,%s,5,1.0,100.0,20,95.5,25.3,10000,5000.0,500,1.5\n",
+			i, i, fmt.Sprintf("%02d%02d2023", (i%12)+1, (i%28)+1)))
+	}
 	headers := []string{"Machine_ID", "MCH_Casino_ID", "MCH_Date", "Number_ReelsLinesScatter", "Min_Wager", "Max_Wager", "Symbols_Per_Reel", "PaybackPCT", "Hit_FrequencyPCT", "Plays_Per_Jackpot", "Jackpot_Amount", "Plays_Per_Bonus", "Volatility_Index"}
 
 	out := make(chan csv.RowData, 20)
 	ctx := context.Background()
 
 	go func() {
-		if err := csv.CSVToChanMaps(ctx, path, headers, out); err != nil {
+		if err := csv.CSVToChanMaps(ctx, strings.NewReader(buf.String()), headers, out); err != nil {
 			t.Errorf("CSVToChanMaps error: %v", err)
 		}
 	}()
@@ -219,19 +223,15 @@ func TestCSVToChanMapsCorrectRowCount(t *testing.T) {
 }
 
 func TestCSVToChanMapsHeaderMapping(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "mapping.csv")
-	csvContent := "Name,Age,City\nAlice,30,NYC\nBob,25,LA\n"
-	if err := os.WriteFile(path, []byte(csvContent), 0644); err != nil {
-		t.Fatal(err)
-	}
+	// Data only, no header line (CSVToChanMaps expects reader positioned after header)
+	csvData := "Alice,30,NYC\nBob,25,LA\n"
 
 	headers := []string{"Name", "Age", "City"}
 	out := make(chan csv.RowData, 10)
 	ctx := context.Background()
 
 	go func() {
-		if err := csv.CSVToChanMaps(ctx, path, headers, out); err != nil {
+		if err := csv.CSVToChanMaps(ctx, strings.NewReader(csvData), headers, out); err != nil {
 			t.Errorf("CSVToChanMaps error: %v", err)
 		}
 	}()
@@ -263,8 +263,12 @@ func TestCSVToChanMapsHeaderMapping(t *testing.T) {
 }
 
 func TestCSVToChanMapsContextCancellation(t *testing.T) {
-	dir := t.TempDir()
-	path := writeCasinoParSheetCSV(t, dir, 1000)
+	// Build 1000 rows of data without header
+	var buf strings.Builder
+	for i := 1; i <= 1000; i++ {
+		buf.WriteString(fmt.Sprintf("MACH%03d,%d,%s,5,1.0,100.0,20,95.5,25.3,10000,5000.0,500,1.5\n",
+			i, i, fmt.Sprintf("%02d%02d2023", (i%12)+1, (i%28)+1)))
+	}
 	headers := []string{"Machine_ID", "MCH_Casino_ID", "MCH_Date", "Number_ReelsLinesScatter", "Min_Wager", "Max_Wager", "Symbols_Per_Reel", "PaybackPCT", "Hit_FrequencyPCT", "Plays_Per_Jackpot", "Jackpot_Amount", "Plays_Per_Bonus", "Volatility_Index"}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -273,7 +277,7 @@ func TestCSVToChanMapsContextCancellation(t *testing.T) {
 	var feedErr error
 	done := make(chan struct{})
 	go func() {
-		feedErr = csv.CSVToChanMaps(ctx, path, headers, out)
+		feedErr = csv.CSVToChanMaps(ctx, strings.NewReader(buf.String()), headers, out)
 		done <- struct{}{}
 	}()
 
