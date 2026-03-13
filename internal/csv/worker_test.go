@@ -316,7 +316,7 @@ func TestSingleFileProcessesCompletely(t *testing.T) {
 	log := &testLogger{t: t}
 
 	ctx := context.Background()
-	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta)
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
 
 	proc.AddWork(csv.FileMetadata{
 		ID:               "test-1",
@@ -382,7 +382,7 @@ func TestRowErrorAbortsFile(t *testing.T) {
 	log := &testLogger{t: t}
 
 	ctx := context.Background()
-	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta)
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
 
 	proc.AddWork(csv.FileMetadata{
 		ID:               "test-bad",
@@ -418,7 +418,7 @@ func TestOutputHasHashedIdentifiers(t *testing.T) {
 	log := &testLogger{t: t}
 
 	ctx := context.Background()
-	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta)
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
 
 	proc.AddWork(csv.FileMetadata{
 		ID:               "test-hash",
@@ -474,7 +474,7 @@ func TestSaveDBCalledAfterFile(t *testing.T) {
 	log := &testLogger{t: t}
 
 	ctx := context.Background()
-	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta)
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
 
 	proc.AddWork(csv.FileMetadata{
 		ID:               "test-savedb",
@@ -504,7 +504,7 @@ func TestSaveDBCalledOnFailure(t *testing.T) {
 	log := &testLogger{t: t}
 
 	ctx := context.Background()
-	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta)
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
 
 	proc.AddWork(csv.FileMetadata{
 		ID:               "test-fail-savedb",
@@ -533,7 +533,7 @@ func TestMultipleFilesQueued(t *testing.T) {
 	log := &testLogger{t: t}
 
 	ctx := context.Background()
-	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta)
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
 
 	for i := 0; i < 3; i++ {
 		subDir := filepath.Join(dir, fmt.Sprintf("f%d", i))
@@ -578,7 +578,7 @@ func TestNoMatchHeadersFailure(t *testing.T) {
 	log := &testLogger{t: t}
 
 	ctx := context.Background()
-	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta)
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
 
 	proc.AddWork(csv.FileMetadata{
 		ID:               "test-nomatch",
@@ -601,7 +601,10 @@ func TestNoMatchHeadersFailure(t *testing.T) {
 	}
 }
 
-func TestFeederReopenFailureEmitsFailure(t *testing.T) {
+func TestFeederUsesOpenFD(t *testing.T) {
+	// After the TOCTOU fix, the feeder no longer re-opens the file. It uses the
+	// already-open file descriptor, so deleting the underlying file after open
+	// should NOT cause a failure on Linux (the fd remains valid).
 	dir := t.TempDir()
 	workDir := filepath.Join(dir, "out")
 	if err := os.MkdirAll(workDir, 0755); err != nil {
@@ -620,23 +623,22 @@ func TestFeederReopenFailureEmitsFailure(t *testing.T) {
 	h := &testHashers{}
 	log := &testLogger{t: t}
 
-	// Custom detect func that removes the real file after detection succeeds,
-	// so the feeder's re-open of the symlink will fail.
+	// Custom detect func that removes the real file after detection succeeds.
+	// Since we now keep the fd open, this should still succeed on Linux.
 	deletingDetect := func(headers []string, allMetadata []csv.CSVMetadata) (csv.CSVMetadata, error) {
 		meta, err := columnmapping.DetectCSVType(headers, allMetadata)
 		if err != nil {
 			return nil, err
 		}
-		// Remove real file — the symlink now points to nothing
 		os.Remove(realPath)
 		return meta, nil
 	}
 
 	ctx := context.Background()
-	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, deletingDetect, wrapBuildMeta)
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, deletingDetect, wrapBuildMeta, 0, 0)
 
 	proc.AddWork(csv.FileMetadata{
-		ID:               "test-feeder-fail",
+		ID:               "test-feeder-fd",
 		OriginalFilename: "link.csv",
 		LocalFilePath:    linkPath,
 		UploadedAt:       time.Now(),
@@ -648,13 +650,12 @@ func TestFeederReopenFailureEmitsFailure(t *testing.T) {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 
-	if len(sink.successes) != 0 {
-		t.Error("expected no Success events when feeder cannot re-open file")
-	}
-	if len(sink.failures) == 0 {
-		t.Error("expected Failure event when feeder cannot re-open file")
-	} else if !strings.Contains(sink.failures[0].err.Error(), "feeder open error") {
-		t.Errorf("expected feeder open error, got: %v", sink.failures[0].err)
+	// On Linux, an open fd survives unlink — file should process successfully.
+	if len(sink.successes) != 1 {
+		if len(sink.failures) > 0 {
+			t.Logf("failure: %v", sink.failures[0].err)
+		}
+		t.Errorf("expected 1 Success event, got %d", len(sink.successes))
 	}
 }
 
@@ -671,7 +672,7 @@ func TestBOMStripping(t *testing.T) {
 	log := &testLogger{t: t}
 
 	ctx := context.Background()
-	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta)
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
 
 	proc.AddWork(csv.FileMetadata{
 		ID:               "test-bom",
@@ -691,6 +692,213 @@ func TestBOMStripping(t *testing.T) {
 			t.Fatalf("expected success but got failure: %v", sink.failures[0].err)
 		}
 		t.Fatal("expected 1 Success event for BOM file")
+	}
+}
+
+// --- Security Fix Tests ---
+
+func TestSanitizeFileIDPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	csvPath := writeCasinoParSheetCSV(t, dir, 2)
+	sink := &testEventSink{}
+	h := &testHashers{}
+	log := &testLogger{t: t}
+
+	ctx := context.Background()
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
+
+	// Use a malicious file ID with path traversal characters
+	proc.AddWork(csv.FileMetadata{
+		ID:               "../../../etc/evil",
+		OriginalFilename: "parsheet.csv",
+		LocalFilePath:    csvPath,
+		UploadedAt:       time.Now(),
+	}, h, sink, csv.Quoted("OP1"))
+
+	proc.Stop()
+	proc.Wait()
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+
+	if len(sink.successes) != 1 {
+		if len(sink.failures) > 0 {
+			t.Fatalf("expected success but got failure: %v", sink.failures[0].err)
+		}
+		t.Fatal("expected 1 Success event")
+	}
+
+	// Output file must be inside workDir, not escaped via traversal
+	outPath := sink.successes[0].OutPath
+	if !strings.HasPrefix(outPath, workDir) {
+		t.Errorf("output file %q escaped working directory %q", outPath, workDir)
+	}
+	// Should not contain ".." in the filename
+	base := filepath.Base(outPath)
+	if strings.Contains(base, "..") {
+		t.Errorf("output filename %q contains path traversal", base)
+	}
+}
+
+func TestErrorMessagesDoNotLeakPaths(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &testEventSink{}
+	h := &testHashers{}
+	log := &testLogger{t: t}
+
+	ctx := context.Background()
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 0)
+
+	// Point to a non-existent file
+	proc.AddWork(csv.FileMetadata{
+		ID:               "test-noleak",
+		OriginalFilename: "uploaded.csv",
+		LocalFilePath:    filepath.Join(dir, "secret-internal-path", "nonexistent.csv"),
+		UploadedAt:       time.Now(),
+	}, h, sink, csv.Quoted("OP1"))
+
+	proc.Stop()
+	proc.Wait()
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+
+	if len(sink.failures) == 0 {
+		t.Fatal("expected a failure event")
+	}
+	errMsg := sink.failures[0].err.Error()
+	if strings.Contains(errMsg, "secret-internal-path") {
+		t.Errorf("error message leaks internal path: %q", errMsg)
+	}
+	if !strings.Contains(errMsg, "uploaded.csv") {
+		t.Errorf("error message should reference original filename, got: %q", errMsg)
+	}
+}
+
+func TestMaxFileSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	csvPath := writeCasinoParSheetCSV(t, dir, 5)
+	sink := &testEventSink{}
+	h := &testHashers{}
+	log := &testLogger{t: t}
+
+	ctx := context.Background()
+	// Set a tiny max file size (1 byte) so any file exceeds it
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 1, 0)
+
+	proc.AddWork(csv.FileMetadata{
+		ID:               "test-maxsize",
+		OriginalFilename: "parsheet.csv",
+		LocalFilePath:    csvPath,
+		UploadedAt:       time.Now(),
+	}, h, sink, csv.Quoted("OP1"))
+
+	proc.Stop()
+	proc.Wait()
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+
+	if len(sink.failures) == 0 {
+		t.Fatal("expected Failure event for oversized file")
+	}
+	if !strings.Contains(sink.failures[0].err.Error(), "exceeds maximum size limit") {
+		t.Errorf("expected size limit error, got: %v", sink.failures[0].err)
+	}
+	if len(sink.successes) != 0 {
+		t.Error("expected no Success events")
+	}
+}
+
+func TestMaxRowsLimit(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	csvPath := writeCasinoParSheetCSV(t, dir, 10)
+	sink := &testEventSink{}
+	h := &testHashers{}
+	log := &testLogger{t: t}
+
+	ctx := context.Background()
+	// Set max rows to 5, but file has 10 rows
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 5)
+
+	proc.AddWork(csv.FileMetadata{
+		ID:               "test-maxrows",
+		OriginalFilename: "parsheet.csv",
+		LocalFilePath:    csvPath,
+		UploadedAt:       time.Now(),
+	}, h, sink, csv.Quoted("OP1"))
+
+	proc.Stop()
+	proc.Wait()
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+
+	if len(sink.failures) == 0 {
+		t.Fatal("expected Failure event for too many rows")
+	}
+	if !strings.Contains(sink.failures[0].err.Error(), "exceeding limit of 5") {
+		t.Errorf("expected row limit error, got: %v", sink.failures[0].err)
+	}
+	if len(sink.successes) != 0 {
+		t.Error("expected no Success events")
+	}
+}
+
+func TestMaxRowsWithinLimit(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	csvPath := writeCasinoParSheetCSV(t, dir, 3)
+	sink := &testEventSink{}
+	h := &testHashers{}
+	log := &testLogger{t: t}
+
+	ctx := context.Background()
+	// Set max rows to 5, file has 3 rows — should succeed
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, wrapDetect, wrapBuildMeta, 0, 5)
+
+	proc.AddWork(csv.FileMetadata{
+		ID:               "test-undermax",
+		OriginalFilename: "parsheet.csv",
+		LocalFilePath:    csvPath,
+		UploadedAt:       time.Now(),
+	}, h, sink, csv.Quoted("OP1"))
+
+	proc.Stop()
+	proc.Wait()
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+
+	if len(sink.successes) != 1 {
+		if len(sink.failures) > 0 {
+			t.Fatalf("expected success but got failure: %v", sink.failures[0].err)
+		}
+		t.Fatal("expected 1 Success event")
 	}
 }
 

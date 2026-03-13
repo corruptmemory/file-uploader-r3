@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,15 @@ import (
 	"github.com/corruptmemory/file-uploader-r3/internal/hashers"
 	"github.com/dimchansky/utfbom"
 )
+
+// sanitizeFileIDRe matches any character that is not alphanumeric, hyphen, or underscore.
+var sanitizeFileIDRe = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+
+// sanitizeFileID strips path separators and non-safe characters from a file ID
+// to prevent path traversal when used in temp file patterns.
+func sanitizeFileID(id string) string {
+	return sanitizeFileIDRe.ReplaceAllString(id, "_")
+}
 
 // DetectFunc is a function type that detects the CSV type from headers and metadata.
 // It should return exactly one matching CSVMetadata or an error.
@@ -97,13 +107,15 @@ type Processor struct {
 	log              Logger
 	detectFunc       DetectFunc
 	buildMetadata    BuildMetadataFunc
+	MaxFileSize      int64 // 0 means no limit
+	MaxRows          int   // 0 means no limit
 }
 
 // NewProcessor creates a Processor and starts a single goroutine that reads
 // from the queue and processes files serially. The detectFunc and buildMeta
 // parameters break the import cycle between csv and csv/columnmapping:
 // callers pass columnmapping.DetectCSVType and columnmapping.BuildAllMetadata.
-func NewProcessor(ctx context.Context, log Logger, queueSize, workerCount int, workingDirectory string, detectFunc DetectFunc, buildMeta BuildMetadataFunc) *Processor {
+func NewProcessor(ctx context.Context, log Logger, queueSize, workerCount int, workingDirectory string, detectFunc DetectFunc, buildMeta BuildMetadataFunc, maxFileSize int64, maxRows int) *Processor {
 	p := &Processor{
 		queue:            make(chan workUnit, queueSize),
 		workerCount:      workerCount,
@@ -111,6 +123,8 @@ func NewProcessor(ctx context.Context, log Logger, queueSize, workerCount int, w
 		log:              log,
 		detectFunc:       detectFunc,
 		buildMetadata:    buildMeta,
+		MaxFileSize:      maxFileSize,
+		MaxRows:          maxRows,
 	}
 	p.queueWg.Add(1)
 	go func() {
@@ -160,15 +174,30 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 	// 2. Open file with BOM stripping, read headers
 	inFile, err := os.Open(wu.file.LocalFilePath)
 	if err != nil {
-		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("opening file: %w", err))
+		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("cannot open file %q (id: %s)", wu.file.OriginalFilename, wu.file.ID))
 		return
 	}
-	defer inFile.Close()
+
+	// Check file size limits
+	if p.MaxFileSize > 0 {
+		fi, err := inFile.Stat()
+		if err != nil {
+			inFile.Close()
+			wu.eventSink.Failure(outMeta, progress, fmt.Errorf("cannot stat file %q (id: %s)", wu.file.OriginalFilename, wu.file.ID))
+			return
+		}
+		if fi.Size() > p.MaxFileSize {
+			inFile.Close()
+			wu.eventSink.Failure(outMeta, progress, fmt.Errorf("file %q exceeds maximum size limit", wu.file.OriginalFilename))
+			return
+		}
+	}
 
 	bomReader := utfbom.SkipOnly(inFile)
 	csvReader := csv.NewReader(bomReader)
 	headers, err := readHeaders(csvReader)
 	if err != nil {
+		inFile.Close()
 		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("reading headers: %w", err))
 		return
 	}
@@ -177,6 +206,7 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 	allMeta := p.buildMetadata(wu.hashers, wu.operatorID)
 	handler, err := p.detectFunc(headers, allMeta)
 	if err != nil {
+		inFile.Close()
 		wu.eventSink.Failure(outMeta, progress, err)
 		return
 	}
@@ -184,17 +214,33 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 	outMeta.CSVType = handler.Type()
 
 	// 4. Count total data rows using the already-positioned CSV reader.
-	// This consumes the rest of the file; the feeder will re-open it.
+	// This consumes the rest of the file; we seek back for the feeder.
 	totalRows, err := countCSVRows(csvReader)
 	if err != nil {
-		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("counting rows: %w", err))
+		inFile.Close()
+		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("error counting rows in %q: %w", wu.file.OriginalFilename, err))
 		return
 	}
 	progress.TotalRows = totalRows
 
-	// 5. Create output file
-	outFile, err := os.CreateTemp(p.workingDirectory, fmt.Sprintf("out-%s-*.csv", wu.file.ID))
+	// Check row count limits
+	if p.MaxRows > 0 && totalRows > p.MaxRows {
+		inFile.Close()
+		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("file %q has %d rows, exceeding limit of %d", wu.file.OriginalFilename, totalRows, p.MaxRows))
+		return
+	}
+
+	// Seek back to start for the feeder (eliminates TOCTOU from re-opening)
+	if _, err := inFile.Seek(0, io.SeekStart); err != nil {
+		inFile.Close()
+		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("cannot rewind file %q (id: %s)", wu.file.OriginalFilename, wu.file.ID))
+		return
+	}
+
+	// 5. Create output file (sanitize file ID to prevent path traversal)
+	outFile, err := os.CreateTemp(p.workingDirectory, fmt.Sprintf("out-%s-*.csv", sanitizeFileID(wu.file.ID)))
 	if err != nil {
+		inFile.Close()
 		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("creating output file: %w", err))
 		return
 	}
@@ -205,6 +251,7 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 	headerLine := quoteHeaders(handler.OutputHeaders())
 	if _, err := outWriter.WriteString(headerLine + "\n"); err != nil {
 		outFile.Close()
+		inFile.Close()
 		os.Remove(outMeta.OutPath)
 		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("writing headers: %w", err))
 		return
@@ -242,20 +289,14 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		}()
 	}
 
-	// Launch feeder goroutine: re-open file, BOM-strip, skip header via csv.Reader, then feed rows.
+	// Launch feeder goroutine: use the already-open inFile (seeked to start),
+	// BOM-strip, skip header, then feed rows.
 	// Errors are sent on feederErrCh so the main loop can emit Failure instead of Success.
 	feederErrCh := make(chan error, 1)
 	go func() {
 		defer close(feederErrCh)
-		f, err := os.Open(wu.file.LocalFilePath)
-		if err != nil {
-			feederErrCh <- fmt.Errorf("feeder open error: %w", err)
-			close(inputCh)
-			return
-		}
-		defer f.Close()
 
-		br := bufio.NewReader(utfbom.SkipOnly(f))
+		br := bufio.NewReader(utfbom.SkipOnly(inFile))
 		// Skip header line with ReadString rather than csv.NewReader().Read() because
 		// csv.NewReader buffers ahead, consuming bytes from br that CSVToChanMaps
 		// would then miss. All 10 CSV types use simple single-line headers, so
@@ -317,6 +358,7 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		processingErr = fmt.Errorf("flushing output: %w", err)
 	}
 	outFile.Close()
+	inFile.Close()
 
 	// Emit final outcome — Success or Failure — exactly once.
 	if processingErr == nil {

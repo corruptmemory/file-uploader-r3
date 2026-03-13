@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 
 	"golang.org/x/crypto/argon2"
@@ -28,6 +29,7 @@ type PlayerDB interface {
 
 // PlayerDataHasher implements the Hashers interface using Argon2id hashing.
 type PlayerDataHasher struct {
+	mu                            sync.Mutex
 	useOnlyFirstLetterOfFirstName bool
 	dbPath                        string
 	uniqueIDPepper                string
@@ -78,6 +80,8 @@ func (h *PlayerDataHasher) PlayerUniqueHasher(last4SSN, firstName, lastName, dob
 // OrganizationPlayerIDHasher computes a hash for an organization player ID,
 // using the PlayerDB cache for deduplication.
 func (h *PlayerDataHasher) OrganizationPlayerIDHasher(playerID, country, state string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if metaID, found := h.playersdb.GetPlayerByOrgPlayerID(playerID, country, state); found {
 		return metaID
 	}
