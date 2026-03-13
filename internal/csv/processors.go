@@ -684,7 +684,7 @@ type uniqueIDProcessor struct {
 	fallbackLast4SSN  string
 	inDOB             string
 	outUniquePlayerID string
-	hasher            func(lastName, firstName, last4SSN, dob string) string
+	hasher            func(last4SSN, firstName, lastName, dob string) string
 }
 
 func (p *uniqueIDProcessor) InputColumns() []string {
@@ -741,13 +741,14 @@ func (p *uniqueIDProcessor) Process(rowdata RowData) ([]CSVOutputString, error) 
 	dob := dobTime.Format("2006-01-02")
 
 	// Pass raw names to hasher (normalization happens inside the hasher)
-	uniqueID := p.hasher(lastName, firstName, last4SSN, dob)
+	// Parameter order matches Hashers.PlayerUniqueHasher: last4SSN, firstName, lastName, dob
+	uniqueID := p.hasher(last4SSN, firstName, lastName, dob)
 	return []CSVOutputString{Quoted(uniqueID)}, nil
 }
 
 // UniqueID creates a UniqueID processor with fully specified column names.
 func UniqueID(inLastName, inFirstName, inLast4SSN, fallbackLast4SSN, inDOB, outUniquePlayerID string,
-	hasher func(lastName, firstName, last4SSN, dob string) string) InColumnProcessor {
+	hasher func(last4SSN, firstName, lastName, dob string) string) InColumnProcessor {
 	return &uniqueIDProcessor{
 		inLastName:        inLastName,
 		inFirstName:       inFirstName,
@@ -760,13 +761,13 @@ func UniqueID(inLastName, inFirstName, inLast4SSN, fallbackLast4SSN, inDOB, outU
 }
 
 // UniqueIDDefault creates a UniqueID processor with default column names.
-func UniqueIDDefault(hasher func(lastName, firstName, last4SSN, dob string) string) InColumnProcessor {
+func UniqueIDDefault(hasher func(last4SSN, firstName, lastName, dob string) string) InColumnProcessor {
 	return UniqueID("LastName", "FirstName", "Last4SSN", "", "DOB", "UniquePlayerID", hasher)
 }
 
 // UniqueIDDefaultNullableLast4SSN creates a UniqueID processor with default column names
 // and "XXXX" as fallback for missing Last4SSN.
-func UniqueIDDefaultNullableLast4SSN(hasher func(lastName, firstName, last4SSN, dob string) string) InColumnProcessor {
+func UniqueIDDefaultNullableLast4SSN(hasher func(last4SSN, firstName, lastName, dob string) string) InColumnProcessor {
 	return UniqueID("LastName", "FirstName", "Last4SSN", "XXXX", "DOB", "UniquePlayerID", hasher)
 }
 

@@ -11,15 +11,15 @@ import (
 )
 
 type Args struct {
-	Version    bool   `short:"v" long:"version" description:"Show version and exit"`
-	ConfigFile string `short:"c" long:"config-file" description:"Config file path" default:"./file-uploader.toml"`
-	Endpoint   string `short:"E" long:"endpoint" description:"API endpoint (format: environment,url)"`
-	Address    string `short:"a" long:"address" description:"Listen address"`
-	Port       int    `short:"p" long:"port" description:"Listen port"`
-	Prefix     string `short:"P" long:"prefix" description:"URL prefix"`
+	Version        bool   `short:"v" long:"version" description:"Show version and exit"`
+	ConfigFile     string `short:"c" long:"config-file" description:"Config file path" default:"./file-uploader.toml"`
+	Endpoint       string `short:"E" long:"endpoint" description:"API endpoint (format: environment,url)"`
+	Address        string `short:"a" long:"address" description:"Listen address"`
+	Port           int    `short:"p" long:"port" description:"Listen port"`
+	Prefix         string `short:"P" long:"prefix" description:"URL prefix"`
 	SigningKeyFile string `short:"s" long:"signing-key-file" description:"Path to file containing JWT signing key"`
-	Mock       bool   `long:"mock" description:"Use mock implementations"`
-	MockOutDir string `long:"mock-output-dir" description:"Mock upload output directory" default:"./mock-output"`
+	Mock           bool   `long:"mock" description:"Use mock implementations"`
+	MockOutDir     string `long:"mock-output-dir" description:"Mock upload output directory" default:"./mock-output"`
 
 	config *Config // internal, not a CLI flag
 }

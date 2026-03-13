@@ -32,3 +32,10 @@ Files: internal/csv/types.go, internal/csv/processors.go, internal/csv/metadata.
 Notes: CSVType enum (types 2-11) with String/Slug/FromSlug/AllCSVTypes; RowData, CSVOutputString (Quoted/Raw), CSVOutputRow core types; InColumnProcessor interface with bool (NonNil/Nillable FlexBool), int (4 variants), float (4 variants), string (2 variants with char-based maxLen), datetime (6 variants covering RFC3339/ISO8601/MMDDYYYY/HHMMSS/birth year); ConstantString, MetaID (4 variants), MetaIDFixedLocation, UniqueID (3 variants), CountryAndState processors; CSVMetadata interface with simpleCSVMetadata (case-sensitive header matching, sequential row processing)
 Security fixes: Float processors reject NaN/Inf; SSN values redacted from error messages; all processor errors no longer echo raw input values; Raw type has security comment
 Testable: ./build.sh -t runs all tests across 6 packages
+
+## Spec 06: CSV Type Definitions (06-csv-type-definitions.md)
+Status: DONE
+Files: internal/csv/columnmapping/columnmapping.go, internal/csv/columnmapping/columnmapping_test.go, internal/csv/processors.go (updated MetaIDDefault), internal/csv/csv_test.go (updated)
+Notes: All 10 CSV types registered with exact processor lists per spec. BuildAllMetadata factory takes hashers+operatorID. DetectCSVType auto-detection via header matching. MetaIDDefault updated to use OrganizationPlayerID/OrganizationCountry/OrganizationState. Casino types use custom column names. Casino Players uses "XXXX" SSN fallback. Casino Par Sheet has no player identification. Demographic validates two separate country/state pairs
+Code review fixes: UniqueID processor parameter order fixed to match Hashers.PlayerUniqueHasher(last4SSN, firstName, lastName, dob); gofmt applied to chanutil_test.go, main.go, test-harness; missing-column tests expanded to remove first/middle/last columns; row-processing integration tests added for Players, Casino Players, Casino Par Sheet; hasher parameter order verification test added
+Testable: ./build.sh -t runs all tests across 7 packages including auto-detection for all 10 types, extra columns, missing columns, no-match cases, row processing integration

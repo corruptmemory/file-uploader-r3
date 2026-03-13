@@ -43,10 +43,10 @@ func startTestActor(handler func(testCommand)) (chan testCommand, func()) {
 
 func TestSendReceiveMessage(t *testing.T) {
 	tests := []struct {
-		name      string
-		handler   func(testCommand)
-		wantVal   string
-		wantErr   error
+		name    string
+		handler func(testCommand)
+		wantVal string
+		wantErr error
 	}{
 		{
 			name: "returns typed result",

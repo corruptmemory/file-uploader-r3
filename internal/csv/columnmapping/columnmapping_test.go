@@ -1,6 +1,7 @@
 package columnmapping
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/corruptmemory/file-uploader-r3/internal/csv"
@@ -132,7 +133,28 @@ func TestDetectCSVType_MissingRequiredColumn(t *testing.T) {
 			incomplete := headers[:len(headers)-1]
 			_, err := DetectCSVType(incomplete, allMeta)
 			if err == nil {
-				t.Errorf("DetectCSVType with missing column should return error for %s", ct)
+				t.Errorf("DetectCSVType with last column removed should return error for %s", ct)
+			}
+
+			// Remove the first required column
+			if len(headers) > 1 {
+				incomplete = headers[1:]
+				_, err = DetectCSVType(incomplete, allMeta)
+				if err == nil {
+					t.Errorf("DetectCSVType with first column removed should return error for %s", ct)
+				}
+			}
+
+			// Remove a middle column
+			if len(headers) > 2 {
+				mid := len(headers) / 2
+				incomplete = make([]string, 0, len(headers)-1)
+				incomplete = append(incomplete, headers[:mid]...)
+				incomplete = append(incomplete, headers[mid+1:]...)
+				_, err = DetectCSVType(incomplete, allMeta)
+				if err == nil {
+					t.Errorf("DetectCSVType with middle column removed should return error for %s", ct)
+				}
 			}
 		})
 	}
@@ -238,3 +260,162 @@ func TestCasinoTypes_UseCustomColumnNames(t *testing.T) {
 		})
 	}
 }
+
+// TestRowProcessingIntegration verifies that representative CSV types can process
+// valid rows without error. This catches constructor wiring bugs (e.g. parameter
+// order mismatches) that header-only tests miss.
+func TestRowProcessingIntegration(t *testing.T) {
+	allMeta := buildTestMetadata()
+
+	// Players type: exercises UniqueID + MetaID + ConstantString
+	t.Run("Players", func(t *testing.T) {
+		var meta csv.CSVMetadata
+		for _, m := range allMeta {
+			if m.Type() == csv.CSVPlayers {
+				meta = m
+				break
+			}
+		}
+		if meta == nil {
+			t.Fatal("Players metadata not found")
+		}
+
+		row := csv.RowData{RowIndex: 1, RowMap: map[string]string{
+			"LastName": "Smith", "FirstName": "John", "Last4SSN": "1234",
+			"DOB": "1990-05-15", "OrganizationPlayerID": "P001",
+			"OrganizationCountry": "US", "OrganizationState": "NJ",
+		}}
+		for i, proc := range meta.ColumnData() {
+			_, err := proc.Process(row)
+			if err != nil {
+				t.Errorf("processor %d (%v) failed: %v", i, proc.InputColumns(), err)
+			}
+		}
+	})
+
+	// Casino Players type: exercises UniqueID with XXXX fallback + MetaID with custom columns
+	t.Run("Casino_Players", func(t *testing.T) {
+		var meta csv.CSVMetadata
+		for _, m := range allMeta {
+			if m.Type() == csv.CSVCasinoPlayers {
+				meta = m
+				break
+			}
+		}
+		if meta == nil {
+			t.Fatal("Casino Players metadata not found")
+		}
+
+		row := csv.RowData{RowIndex: 1, RowMap: map[string]string{
+			"Player_Last_Name": "Smith", "Player_First_Name": "John",
+			"Player_Last_4SSN": "", "Player_DOB": "1990-05-15",
+			"Casino_Player_Id": "CP001", "Casino_Country": "US", "Casino_State": "NJ",
+			"Casino_ID": "42", "Gender": "M", "Zip_Cd": "07001",
+			"City_Cd": "Newark", "State_Cd": "NJ", "Country_Id": "US",
+			"Tier_ID": "1", "Tier_Name": "Gold", "Enrolled_Date": "01/15/2024",
+		}}
+		for i, proc := range meta.ColumnData() {
+			_, err := proc.Process(row)
+			if err != nil {
+				t.Errorf("processor %d (%v) failed: %v", i, proc.InputColumns(), err)
+			}
+		}
+	})
+
+	// Casino Par Sheet: no player identification processors
+	t.Run("Casino_Par_Sheet", func(t *testing.T) {
+		var meta csv.CSVMetadata
+		for _, m := range allMeta {
+			if m.Type() == csv.CSVCasinoParSheet {
+				meta = m
+				break
+			}
+		}
+		if meta == nil {
+			t.Fatal("Casino Par Sheet metadata not found")
+		}
+
+		row := csv.RowData{RowIndex: 1, RowMap: map[string]string{
+			"Machine_ID": "M001", "MCH_Casino_ID": "42", "MCH_Date": "01152024",
+		}}
+		for i, proc := range meta.ColumnData() {
+			_, err := proc.Process(row)
+			if err != nil {
+				t.Errorf("processor %d (%v) failed: %v", i, proc.InputColumns(), err)
+			}
+		}
+	})
+}
+
+// TestRowProcessingHasherParameterOrder verifies that the UniqueID processor
+// passes parameters to the hasher in the correct order (last4SSN, firstName,
+// lastName, dob) matching the Hashers.PlayerUniqueHasher interface.
+func TestRowProcessingHasherParameterOrder(t *testing.T) {
+	var gotArgs [4]string
+	h := &paramOrderHashers{captureUnique: func(a, b, c, d string) {
+		gotArgs = [4]string{a, b, c, d}
+	}}
+	operatorID := csv.Quoted("test-operator")
+	allMeta := BuildAllMetadata(h, operatorID)
+
+	// Find Players metadata
+	var playersMeta csv.CSVMetadata
+	for _, m := range allMeta {
+		if m.Type() == csv.CSVPlayers {
+			playersMeta = m
+			break
+		}
+	}
+	if playersMeta == nil {
+		t.Fatal("Players metadata not found")
+	}
+
+	row := csv.RowData{RowIndex: 1, RowMap: map[string]string{
+		"LastName": "Smith", "FirstName": "John", "Last4SSN": "1234",
+		"DOB": "1990-05-15", "OrganizationPlayerID": "P001",
+		"PlayerCountry": "US", "PlayerState": "NJ",
+	}}
+
+	for _, proc := range playersMeta.ColumnData() {
+		if proc.OutputUniqueID() {
+			_, err := proc.Process(row)
+			if err != nil {
+				t.Fatalf("process error: %v", err)
+			}
+			// Verify parameter order: last4SSN, firstName, lastName, dob
+			if gotArgs[0] != "1234" {
+				t.Errorf("hasher arg 0 (last4SSN): got %q, want %q", gotArgs[0], "1234")
+			}
+			if gotArgs[1] != "John" {
+				t.Errorf("hasher arg 1 (firstName): got %q, want %q", gotArgs[1], "John")
+			}
+			if gotArgs[2] != "Smith" {
+				t.Errorf("hasher arg 2 (lastName): got %q, want %q", gotArgs[2], "Smith")
+			}
+			if gotArgs[3] != "1990-05-15" {
+				t.Errorf("hasher arg 3 (dob): got %q, want %q", gotArgs[3], "1990-05-15")
+			}
+			return
+		}
+	}
+	t.Fatal("no UniqueID processor found in Players metadata")
+}
+
+// paramOrderHashers captures the arguments passed to PlayerUniqueHasher
+// to verify parameter ordering.
+type paramOrderHashers struct {
+	captureUnique func(a, b, c, d string)
+}
+
+func (p *paramOrderHashers) PlayerUniqueHasher(last4SSN, firstName, lastName, dob string) string {
+	if p.captureUnique != nil {
+		p.captureUnique(last4SSN, firstName, lastName, dob)
+	}
+	return fmt.Sprintf("uid:%s:%s:%s:%s", last4SSN, firstName, lastName, dob)
+}
+
+func (p *paramOrderHashers) OrganizationPlayerIDHasher(playerID, country, state string) string {
+	return "meta:" + playerID + ":" + country + ":" + state
+}
+
+func (p *paramOrderHashers) SaveDB() error { return nil }

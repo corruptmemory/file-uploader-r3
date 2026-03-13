@@ -688,8 +688,8 @@ func TestMetaIDFixedLocation(t *testing.T) {
 // --- UniqueID Tests ---
 
 func TestUniqueIDProcessor(t *testing.T) {
-	hasher := func(lastName, firstName, last4SSN, dob string) string {
-		return "uid:" + lastName + ":" + firstName + ":" + last4SSN + ":" + dob
+	hasher := func(last4SSN, firstName, lastName, dob string) string {
+		return "uid:" + last4SSN + ":" + firstName + ":" + lastName + ":" + dob
 	}
 
 	proc := UniqueIDDefault(hasher)
@@ -703,8 +703,8 @@ func TestUniqueIDProcessor(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 		return
 	}
-	// Hasher receives raw names
-	want := "uid:Smith:John:1234:1990-05-15"
+	// Hasher receives: last4SSN, firstName, lastName, dob (matching Hashers interface)
+	want := "uid:1234:John:Smith:1990-05-15"
 	// Result is Quoted, so extract inner value
 	got := result[0].String()
 	if got != want {
@@ -753,7 +753,7 @@ func TestUniqueIDProcessor(t *testing.T) {
 }
 
 func TestUniqueIDSSNNotInErrorMessages(t *testing.T) {
-	hasher := func(lastName, firstName, last4SSN, dob string) string { return "uid" }
+	hasher := func(last4SSN, firstName, lastName, dob string) string { return "uid" }
 	proc := UniqueIDDefault(hasher)
 
 	// Short SSN - error must not contain the SSN value
@@ -782,8 +782,8 @@ func TestUniqueIDSSNNotInErrorMessages(t *testing.T) {
 }
 
 func TestUniqueIDDefaultNullableLast4SSN(t *testing.T) {
-	hasher := func(lastName, firstName, last4SSN, dob string) string {
-		return "uid:" + lastName + ":" + firstName + ":" + last4SSN + ":" + dob
+	hasher := func(last4SSN, firstName, lastName, dob string) string {
+		return "uid:" + last4SSN + ":" + firstName + ":" + lastName + ":" + dob
 	}
 
 	proc := UniqueIDDefaultNullableLast4SSN(hasher)
@@ -797,7 +797,7 @@ func TestUniqueIDDefaultNullableLast4SSN(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 		return
 	}
-	want := "uid:Smith:John:XXXX:1990-05-15"
+	want := "uid:XXXX:John:Smith:1990-05-15"
 	got := result[0].String()
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
