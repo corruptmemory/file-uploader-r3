@@ -385,6 +385,9 @@ func NillableDateAndTimeNotAfterNow(in, out string) InColumnProcessor {
 			if err != nil {
 				return nil, err
 			}
+			if t.IsZero() {
+				return nil, fmt.Errorf("datetime must not be zero")
+			}
 			if t.After(time.Now()) {
 				return nil, fmt.Errorf("datetime must not be in the future")
 			}
@@ -631,7 +634,10 @@ func MetaIDFixedLocation(inPlayerID, outMetaID, country, state string,
 		return nil, fmt.Errorf("invalid country %q: %w", country, err)
 	}
 
-	if len(subdivisions) > 0 && state != "" {
+	if len(subdivisions) > 0 {
+		if state == "" {
+			return nil, fmt.Errorf("state is required for country %q", country)
+		}
 		if !slices.Contains(subdivisions, state) {
 			return nil, fmt.Errorf("invalid state %q for country %q", state, country)
 		}

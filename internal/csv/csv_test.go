@@ -658,6 +658,12 @@ func TestMetaIDFixedLocation(t *testing.T) {
 		t.Error("expected error for invalid state")
 	}
 
+	// Empty state for country with required subdivisions
+	_, err = MetaIDFixedLocation("PlayerID", "MetaID", "US", "", hasher)
+	if err == nil {
+		t.Error("expected error for empty state on country requiring subdivisions")
+	}
+
 	// MustMetaIDFixedLocation panics on error
 	defer func() {
 		if r := recover(); r == nil {
