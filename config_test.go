@@ -188,6 +188,39 @@ func TestConfigWriteFileRoundTrip(t *testing.T) {
 	}
 }
 
+func TestConfigWriteFilePermissions(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "secret.toml")
+
+	cfg := DefaultConfig()
+	cfg.SigningKey = "super-secret-key"
+	ac := cfg.ToApplicationConfig()
+
+	writer := cfg.WriteFile(path)
+	if err := writer(ac); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat returned error: %v", err)
+	}
+
+	mode := info.Mode().Perm()
+	if mode != 0600 {
+		t.Errorf("config file permissions = %04o, want 0600", mode)
+	}
+}
+
+func TestExpandPathCleansTraversal(t *testing.T) {
+	// Path traversal sequences should be cleaned by expandPath
+	result := expandPath("./legit/../../../tmp/evil")
+	expected := filepath.Clean("./legit/../../../tmp/evil")
+	if result != expected {
+		t.Errorf("expandPath did not clean path: got %q, want %q", result, expected)
+	}
+}
+
 func TestGenConfigOutputsValidTOML(t *testing.T) {
 	// Capture stdout
 	old := os.Stdout

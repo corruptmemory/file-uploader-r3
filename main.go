@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/corruptmemory/file-uploader-r3/internal/util"
 	flags "github.com/jessevdk/go-flags"
@@ -16,7 +17,7 @@ type Args struct {
 	Address    string `short:"a" long:"address" description:"Listen address"`
 	Port       int    `short:"p" long:"port" description:"Listen port"`
 	Prefix     string `short:"P" long:"prefix" description:"URL prefix"`
-	SigningKey string `short:"s" long:"signing-key" description:"JWT signing key"`
+	SigningKeyFile string `short:"s" long:"signing-key-file" description:"Path to file containing JWT signing key"`
 	Mock       bool   `long:"mock" description:"Use mock implementations"`
 	MockOutDir string `long:"mock-output-dir" description:"Mock upload output directory" default:"./mock-output"`
 
@@ -72,8 +73,12 @@ func main() {
 	if args.Port != 0 {
 		cfg.Port = args.Port
 	}
-	if args.SigningKey != "" {
-		cfg.SigningKey = args.SigningKey
+	if args.SigningKeyFile != "" {
+		data, err := os.ReadFile(args.SigningKeyFile)
+		if err != nil {
+			log.Fatalf("Failed to read signing key file %q: %v", args.SigningKeyFile, err)
+		}
+		cfg.SigningKey = strings.TrimSpace(string(data))
 	}
 	// Address and Prefix: only override TOML when the user explicitly passed the flag.
 	// Since there's no default: tag, empty string means "not set on CLI".

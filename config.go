@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -92,16 +93,17 @@ func LoadConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
-// expandPath expands ~ in paths using go-homedir.
+// expandPath expands ~ in paths using go-homedir and cleans the result
+// to canonicalize any path traversal sequences.
 func expandPath(path string) string {
 	if path == "" {
 		return path
 	}
 	expanded, err := homedir.Expand(path)
 	if err != nil {
-		return path
+		return filepath.Clean(path)
 	}
-	return expanded
+	return filepath.Clean(expanded)
 }
 
 // ToApplicationConfig converts a Config to an ApplicationConfig.
@@ -184,7 +186,7 @@ func (c *Config) WriteFile(path string) func(app.ApplicationConfig) error {
 			},
 		}
 
-		f, err := os.Create(path)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
 			return fmt.Errorf("create config file: %w", err)
 		}
