@@ -584,7 +584,7 @@ func TestMetaIDProcessor(t *testing.T) {
 
 	// Valid US
 	row := RowData{RowIndex: 1, RowMap: map[string]string{
-		"PlayerID": "P123", "Country": "US", "State": "NY",
+		"OrganizationPlayerID": "P123", "OrganizationCountry": "US", "OrganizationState": "NY",
 	}}
 	result, err := proc.Process(row)
 	if err != nil {
@@ -601,7 +601,7 @@ func TestMetaIDProcessor(t *testing.T) {
 
 	// Missing player ID
 	row = RowData{RowIndex: 1, RowMap: map[string]string{
-		"PlayerID": "", "Country": "US", "State": "NY",
+		"OrganizationPlayerID": "", "OrganizationCountry": "US", "OrganizationState": "NY",
 	}}
 	_, err = proc.Process(row)
 	if err == nil {
@@ -610,7 +610,7 @@ func TestMetaIDProcessor(t *testing.T) {
 
 	// Invalid country
 	row = RowData{RowIndex: 1, RowMap: map[string]string{
-		"PlayerID": "P123", "Country": "XX", "State": "NY",
+		"OrganizationPlayerID": "P123", "OrganizationCountry": "XX", "OrganizationState": "NY",
 	}}
 	_, err = proc.Process(row)
 	if err == nil {
@@ -619,7 +619,7 @@ func TestMetaIDProcessor(t *testing.T) {
 
 	// Invalid state
 	row = RowData{RowIndex: 1, RowMap: map[string]string{
-		"PlayerID": "P123", "Country": "US", "State": "ZZ",
+		"OrganizationPlayerID": "P123", "OrganizationCountry": "US", "OrganizationState": "ZZ",
 	}}
 	_, err = proc.Process(row)
 	if err == nil {
@@ -979,8 +979,8 @@ func TestProcessorInputOutputColumns(t *testing.T) {
 		{
 			"MetaIDDefault",
 			MetaIDDefault(hasher3),
-			[]string{"PlayerID", "Country", "State"},
-			[]string{"MetaID", "Country", "State"},
+			[]string{"OrganizationPlayerID", "OrganizationCountry", "OrganizationState"},
+			[]string{"MetaID", "OrganizationCountry", "OrganizationState"},
 			false, true,
 		},
 		{

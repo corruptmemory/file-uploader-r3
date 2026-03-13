@@ -596,19 +596,19 @@ func MetaID(inPlayerID, outMetaID, inCountry, inState, outCountry, outState stri
 
 // MetaIDDefault creates a MetaID processor with default column names.
 func MetaIDDefault(hasher func(playerID, country, state string) string) InColumnProcessor {
-	return MetaID("PlayerID", "MetaID", "Country", "State", "Country", "State", hasher)
+	return MetaID("OrganizationPlayerID", "MetaID", "OrganizationCountry", "OrganizationState", "OrganizationCountry", "OrganizationState", hasher)
 }
 
 // MetaIDDefaultIn creates a MetaID processor with default input columns but custom output columns.
 func MetaIDDefaultIn(outMetaID, outCountry, outState string,
 	hasher func(playerID, country, state string) string) InColumnProcessor {
-	return MetaID("PlayerID", outMetaID, "Country", "State", outCountry, outState, hasher)
+	return MetaID("OrganizationPlayerID", outMetaID, "OrganizationCountry", "OrganizationState", outCountry, outState, hasher)
 }
 
 // MetaIDDefaultOut creates a MetaID processor with custom input columns but default output columns.
 func MetaIDDefaultOut(inPlayerID, inCountry, inState string,
 	hasher func(playerID, country, state string) string) InColumnProcessor {
-	return MetaID(inPlayerID, "MetaID", inCountry, inState, "Country", "State", hasher)
+	return MetaID(inPlayerID, "MetaID", inCountry, inState, "OrganizationCountry", "OrganizationState", hasher)
 }
 
 // --- MetaIDFixedLocationColumnProcessor ---
