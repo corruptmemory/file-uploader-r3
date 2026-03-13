@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -177,9 +178,15 @@ func (c ApplicationConfig) ValidateSettableValues(logFunc func(string, ...any)) 
 		}
 	}
 
-	// Endpoint: must not be empty
+	// Endpoint: must not be empty, must be a valid URL
 	if c.Endpoint == "" {
 		e := &ApplicationConfigError{Tag: ACEEndpoint, Err: fmt.Errorf("must not be empty")}
+		errs.Add(e)
+		if logFunc != nil {
+			logFunc("validation error: %s", e.Error())
+		}
+	} else if u, err := url.Parse(c.Endpoint); err != nil || u.Scheme == "" || u.Host == "" {
+		e := &ApplicationConfigError{Tag: ACEEndpoint, Err: fmt.Errorf("must be a valid URL with scheme and host")}
 		errs.Add(e)
 		if logFunc != nil {
 			logFunc("validation error: %s", e.Error())

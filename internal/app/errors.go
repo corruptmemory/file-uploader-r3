@@ -9,7 +9,7 @@ import (
 type ApplicationConfigErrorTag int
 
 const (
-	ACEOrgPlayerIDPepper  ApplicationConfigErrorTag = iota
+	ACEOrgPlayerIDPepper ApplicationConfigErrorTag = iota
 	ACEOrgPlayerIDHash
 	ACEEndpoint
 	ACEEnvironment

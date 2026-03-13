@@ -238,6 +238,59 @@ func TestGenConfigOutputsValidTOML(t *testing.T) {
 	}
 }
 
+func TestValidateServerFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		address string
+		port    int
+		wantErr bool
+	}{
+		{"valid", "0.0.0.0", 8080, false},
+		{"valid loopback", "127.0.0.1", 443, false},
+		{"valid ipv6", "::1", 8080, false},
+		{"invalid address", "not-an-ip", 8080, true},
+		{"port too low", "0.0.0.0", 0, true},
+		{"port too high", "0.0.0.0", 65536, true},
+		{"port negative", "0.0.0.0", -1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Address = tt.address
+			cfg.Port = tt.port
+
+			err := cfg.ValidateServerFields()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateServerFields() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestCLIAddressDoesNotClobberTOML(t *testing.T) {
+	// When Address CLI flag is not provided (empty string),
+	// the TOML value should be preserved.
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "test.toml")
+
+	content := `address = "127.0.0.1"
+port = 9090
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test config: %v", err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+
+	if cfg.Address != "127.0.0.1" {
+		t.Errorf("Address = %q, want %q", cfg.Address, "127.0.0.1")
+	}
+}
+
 func TestToApplicationConfigEndpointWithCommaInURL(t *testing.T) {
 	cfg := DefaultConfig()
 	// URL might contain commas after the first one

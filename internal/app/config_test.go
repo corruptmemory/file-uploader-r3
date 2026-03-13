@@ -4,11 +4,6 @@ import (
 	"testing"
 )
 
-func TestToApplicationConfig(t *testing.T) {
-	// Tested via the main package since ToApplicationConfig is on Config.
-	// These tests cover ApplicationConfig methods directly.
-}
-
 func TestNeedsSetup(t *testing.T) {
 	tests := []struct {
 		name string
@@ -259,12 +254,12 @@ func TestMergeSettableValuesCorrectTags(t *testing.T) {
 	}
 
 	other := ApplicationConfig{
-		OrgPlayerIDPepper:  "pepper123",       // unchanged
-		OrgPlayerIDHash:    "argon2",           // unchanged
+		OrgPlayerIDPepper:  "pepper123",               // unchanged
+		OrgPlayerIDHash:    "argon2",                  // unchanged
 		Endpoint:           "https://api.example.com", // unchanged
-		Environment:        "prod",             // unchanged
-		ServiceCredentials: "creds",            // unchanged
-		UsePlayersDB:       "true",             // CHANGED
+		Environment:        "prod",                    // unchanged
+		ServiceCredentials: "creds",                   // unchanged
+		UsePlayersDB:       "true",                    // CHANGED
 	}
 
 	merged, tags := base.MergeSettableValues(other)
@@ -415,6 +410,27 @@ func TestValidateSettableValuesPepperTooShort(t *testing.T) {
 	errs := err.(*ApplicationConfigErrors)
 	if len(errs.GetPlayerIDPepperError()) != 1 {
 		t.Errorf("expected 1 pepper error, got %d", len(errs.GetPlayerIDPepperError()))
+	}
+}
+
+func TestValidateSettableValuesInvalidEndpointURL(t *testing.T) {
+	cfg := ApplicationConfig{
+		OrgPlayerIDPepper:  "pepper123",
+		OrgPlayerIDHash:    "argon2",
+		Endpoint:           "not-a-url",
+		Environment:        "prod",
+		ServiceCredentials: "creds",
+		UsePlayersDB:       "false",
+	}
+
+	err := cfg.ValidateSettableValues(nil)
+	if err == nil {
+		t.Fatal("expected validation error for invalid URL endpoint")
+	}
+
+	errs := err.(*ApplicationConfigErrors)
+	if len(errs.GetEndpointError()) != 1 {
+		t.Errorf("expected 1 endpoint error, got %d", len(errs.GetEndpointError()))
 	}
 }
 

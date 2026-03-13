@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 
@@ -16,7 +17,7 @@ type Config struct {
 	Address            string `toml:"address"`
 	Port               int    `toml:"port"`
 	Prefix             string `toml:"prefix"`
-	SigningKey          string `toml:"signing-key"`
+	SigningKey         string `toml:"signing-key"`
 	ServiceCredentials string `toml:"service-credentials"`
 	UsePlayersDB       bool   `toml:"use-players-db"`
 
@@ -51,7 +52,7 @@ func DefaultConfig() Config {
 		Address:            "0.0.0.0",
 		Port:               8080,
 		Prefix:             "",
-		SigningKey:          "",
+		SigningKey:         "",
 		ServiceCredentials: "",
 		UsePlayersDB:       false,
 		Org: OrgConfig{
@@ -165,7 +166,7 @@ func (c *Config) WriteFile(path string) func(app.ApplicationConfig) error {
 			Address:            c.Address,
 			Port:               c.Port,
 			Prefix:             c.Prefix,
-			SigningKey:          c.SigningKey,
+			SigningKey:         c.SigningKey,
 			ServiceCredentials: ac.ServiceCredentials,
 			UsePlayersDB:       usePlayersDB,
 			Org: OrgConfig{
@@ -196,4 +197,15 @@ func (c *Config) WriteFile(path string) func(app.ApplicationConfig) error {
 
 		return nil
 	}
+}
+
+// ValidateServerFields validates address and port fields.
+func (c *Config) ValidateServerFields() error {
+	if _, err := netip.ParseAddr(c.Address); err != nil {
+		return fmt.Errorf("invalid address %q: %w", c.Address, err)
+	}
+	if c.Port < 1 || c.Port > 65535 {
+		return fmt.Errorf("port must be 1-65535, got %d", c.Port)
+	}
+	return nil
 }

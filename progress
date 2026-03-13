@@ -11,3 +11,10 @@ Status: DONE
 Files: internal/chanutil/chanutil.go, internal/chanutil/chanutil_test.go, internal/app/app.go
 Notes: Generic SendReceiveMessage, SendReceiveError, SendReceiveErrorOrOK with panic recovery; WithResulter interface; Stoppable interface
 Testable: ./build.sh -t runs 10 tests covering typed results, errors, closed channels, buffered capacity
+
+## Spec 03: Configuration (03-configuration.md)
+Status: DONE
+Files: config.go, config_test.go, genconfig.go, internal/app/config.go, internal/app/config_test.go, internal/app/errors.go, internal/util/util.go, internal/util/util_test.go, main.go (updated), go.mod, go.sum
+Notes: TOML config loading (BurntSushi/toml), CLI flags with override precedence, ApplicationConfig value type with With* immutable setters, MergeSettableValues with correct ACEUsePlayersDB tagging, fail-soft ValidateSettableValues, config writer with round-trip, EnsureDirs utility, gen-config subcommand
+Code review fixes: CLI Address/Prefix no longer clobber TOML values (removed default: tags, use empty-string sentinel); gofmt formatting fixed; empty TestToApplicationConfig removed; endpoint URL validation added; address/port validation via net/netip added
+Testable: ./file-uploader gen-config outputs valid TOML, ./build.sh -t runs 30+ tests across 4 packages

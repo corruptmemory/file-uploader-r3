@@ -13,10 +13,10 @@ type Args struct {
 	Version    bool   `short:"v" long:"version" description:"Show version and exit"`
 	ConfigFile string `short:"c" long:"config-file" description:"Config file path" default:"./file-uploader.toml"`
 	Endpoint   string `short:"E" long:"endpoint" description:"API endpoint (format: environment,url)"`
-	Address    string `short:"a" long:"address" description:"Listen address" default:"0.0.0.0"`
+	Address    string `short:"a" long:"address" description:"Listen address"`
 	Port       int    `short:"p" long:"port" description:"Listen port"`
 	Prefix     string `short:"P" long:"prefix" description:"URL prefix"`
-	SigningKey  string `short:"s" long:"signing-key" description:"JWT signing key"`
+	SigningKey string `short:"s" long:"signing-key" description:"JWT signing key"`
 	Mock       bool   `long:"mock" description:"Use mock implementations"`
 	MockOutDir string `long:"mock-output-dir" description:"Mock upload output directory" default:"./mock-output"`
 
@@ -75,11 +75,19 @@ func main() {
 	if args.SigningKey != "" {
 		cfg.SigningKey = args.SigningKey
 	}
-	// Address and Prefix: CLI always has a value (defaults), so override TOML
-	// only if different from the go-flags default (which matches the TOML default).
-	// For simplicity, we always apply them since the CLI default matches TOML default.
-	cfg.Address = args.Address
-	cfg.Prefix = args.Prefix
+	// Address and Prefix: only override TOML when the user explicitly passed the flag.
+	// Since there's no default: tag, empty string means "not set on CLI".
+	if args.Address != "" {
+		cfg.Address = args.Address
+	}
+	if args.Prefix != "" {
+		cfg.Prefix = args.Prefix
+	}
+
+	// Validate server fields (address and port)
+	if err := cfg.ValidateServerFields(); err != nil {
+		log.Fatalf("Invalid server config: %v", err)
+	}
 
 	// Convert to ApplicationConfig
 	appCfg := cfg.ToApplicationConfig()
