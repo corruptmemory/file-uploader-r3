@@ -17,4 +17,11 @@ Status: DONE
 Files: config.go, config_test.go, genconfig.go, internal/app/config.go, internal/app/config_test.go, internal/app/errors.go, internal/util/util.go, internal/util/util_test.go, main.go (updated), go.mod, go.sum
 Notes: TOML config loading (BurntSushi/toml), CLI flags with override precedence, ApplicationConfig value type with With* immutable setters, MergeSettableValues with correct ACEUsePlayersDB tagging, fail-soft ValidateSettableValues, config writer with round-trip, EnsureDirs utility, gen-config subcommand
 Code review fixes: CLI Address/Prefix no longer clobber TOML values (removed default: tags, use empty-string sentinel); gofmt formatting fixed; empty TestToApplicationConfig removed; endpoint URL validation added; address/port validation via net/netip added
+Security fixes: Config file written with 0600 (was 0644 via os.Create); --signing-key replaced with --signing-key-file to avoid /proc exposure; expandPath applies filepath.Clean to sanitize traversal sequences
 Testable: ./file-uploader gen-config outputs valid TOML, ./build.sh -t runs 30+ tests across 4 packages
+
+## Spec 04: Hashing and Name Normalization (04-hashing-and-normalization.md)
+Status: DONE
+Files: internal/hashers/hashers.go, internal/hashers/subdivisions.go, internal/hashers/hashers_test.go, go.mod, go.sum
+Notes: Hashers interface and PlayerDataHasher implementation with Argon2id (time=3, mem=32*1024, par=4, keyLen=32); PlayerDB interface for dependency inversion; ProcessName iterative normalization (diacriticals, punctuation, hyphens, whitespace, lowercase); GetCountrySubdivisions with US/USA support (51 codes); OrganizationPlayerIDHasher uses colon-delimited country+state in hash input and PlayerDB cache
+Testable: ./build.sh -t runs all tests including 16 ProcessName cases, argon2 regression/determinism, cache behavior, country/state validation
