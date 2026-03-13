@@ -273,7 +273,7 @@ func CreateSnapshot(dbPath string, snapshotDir string) (string, error) {
 	}
 	defer src.Close()
 
-	dst, err := os.Create(snapshotPath)
+	dst, err := os.OpenFile(snapshotPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("playerdb: creating snapshot: %w", err)
 	}
@@ -303,6 +303,9 @@ type playerDBCommandTag int
 const (
 	playerDBLookup playerDBCommandTag = iota
 	playerDBAdd
+	playerDBSave
+	playerDBEntries
+	playerDBMerge
 )
 
 type playerDBCommand struct {
@@ -311,6 +314,8 @@ type playerDBCommand struct {
 	playerID string
 	country  string
 	state    string
+	savePath string
+	mergeDB  PlayerDB
 	result   chan any
 }
 
@@ -357,6 +362,24 @@ func (c *ConcurrentPlayerDB) run() {
 		case playerDBAdd:
 			c.db.AddEntry(cmd.metaID, cmd.playerID, cmd.country, cmd.state)
 			// Fire-and-forget: no response needed.
+		case playerDBSave:
+			err := SaveDB(c.db, cmd.savePath)
+			if cmd.result != nil {
+				cmd.result <- err
+			}
+		case playerDBEntries:
+			// Return a copy of the entries slice to avoid aliasing.
+			src := c.db.Entries()
+			cp := make([]Entry, len(src))
+			copy(cp, src)
+			if cmd.result != nil {
+				cmd.result <- cp
+			}
+		case playerDBMerge:
+			c.db.Merge(cmd.mergeDB)
+			if cmd.result != nil {
+				cmd.result <- nil
+			}
 		}
 	}
 }
@@ -393,30 +416,47 @@ func (c *ConcurrentPlayerDB) AddEntry(metaID, playerID, country, state string) {
 	c.commands <- cmd
 }
 
-// Merge delegates to the inner DB. Must only be called when actor is not
-// concurrently processing (e.g., during init or after Close).
+// Merge delegates to the inner DB through the actor channel.
 func (c *ConcurrentPlayerDB) Merge(other PlayerDB) {
-	c.db.Merge(other)
+	_ = chanutil.SendReceiveError[playerDBCommand](
+		c.commands,
+		playerDBCommand{
+			tag:     playerDBMerge,
+			mergeDB: other,
+		},
+	)
 }
 
-// Header returns the header from the inner DB.
+// Header returns the header from the inner DB. Header is immutable after
+// construction, so it is safe to read directly.
 func (c *ConcurrentPlayerDB) Header() DBHeader {
 	return c.db.Header()
 }
 
-// Entries returns entries from the inner DB.
+// Entries returns a copy of the entries through the actor channel.
 func (c *ConcurrentPlayerDB) Entries() []Entry {
-	return c.db.Entries()
+	result, err := chanutil.SendReceiveMessage[playerDBCommand, []Entry](
+		c.commands,
+		playerDBCommand{
+			tag: playerDBEntries,
+		},
+	)
+	if err != nil {
+		return nil
+	}
+	return result
 }
 
-// InnerDB returns the underlying PlayerDB for persistence.
-func (c *ConcurrentPlayerDB) InnerDB() PlayerDB {
-	return c.db
-}
-
-// Save persists the inner database to disk.
+// Save persists the inner database to disk through the actor channel,
+// ensuring all queued AddEntry commands are processed first.
 func (c *ConcurrentPlayerDB) Save(path string) error {
-	return SaveDB(c.db, path)
+	return chanutil.SendReceiveError[playerDBCommand](
+		c.commands,
+		playerDBCommand{
+			tag:      playerDBSave,
+			savePath: path,
+		},
+	)
 }
 
 // Close shuts down the actor goroutine and waits for it to finish.

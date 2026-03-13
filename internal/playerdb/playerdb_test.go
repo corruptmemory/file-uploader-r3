@@ -1,6 +1,7 @@
 package playerdb
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -302,6 +303,63 @@ func TestConcurrentPlayerDB(t *testing.T) {
 	_, found = cdb.GetPlayerByOrgPlayerID("nonexistent", "us", "ma")
 	if found {
 		t.Fatal("expected not found for nonexistent player")
+	}
+}
+
+func TestConcurrentPlayerDBSaveDrainsQueue(t *testing.T) {
+	inner := NewMemDB(testPepper)
+	cdb := NewConcurrentPlayerDB(inner)
+	defer cdb.Close()
+
+	// Fire off many AddEntry commands (fire-and-forget).
+	for i := 0; i < 100; i++ {
+		cdb.AddEntry(fmt.Sprintf("meta%d", i), fmt.Sprintf("player%03d", i), "us", "ma")
+	}
+
+	// Save goes through the actor channel, so it must drain all preceding adds.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "players.db")
+	if err := cdb.Save(dbPath); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Verify all entries were persisted.
+	loaded, err := LoadDB(dbPath, testPepper)
+	if err != nil {
+		t.Fatalf("LoadDB: %v", err)
+	}
+	if len(loaded.Entries()) != 100 {
+		t.Fatalf("expected 100 entries, got %d", len(loaded.Entries()))
+	}
+
+	// Entries() also goes through the actor.
+	entries := cdb.Entries()
+	if len(entries) != 100 {
+		t.Fatalf("expected 100 entries from Entries(), got %d", len(entries))
+	}
+}
+
+func TestConcurrentPlayerDBMergeThroughActor(t *testing.T) {
+	inner := NewMemDB(testPepper)
+	cdb := NewConcurrentPlayerDB(inner)
+	defer cdb.Close()
+
+	cdb.AddEntry("meta1", "player001", "us", "ma")
+
+	other := NewMemDB(testPepper)
+	other.AddEntry("meta2", "player002", "us", "ny")
+
+	// Merge goes through the actor.
+	cdb.Merge(other)
+
+	// Verify both entries are present.
+	_, found := cdb.GetPlayerByOrgPlayerID("player001", "us", "ma")
+	if !found {
+		t.Fatal("expected player001 after merge")
+	}
+	_, found = cdb.GetPlayerByOrgPlayerID("player002", "us", "ny")
+	if !found {
+		t.Fatal("expected player002 after merge")
 	}
 }
 
