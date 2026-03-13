@@ -30,7 +30,7 @@ func main() {
 
 	// Register subcommands
 	parser.AddCommand("gen-config", "Generate default config", "Generate a default TOML configuration file to stdout", &GenConfigCommand{})
-	// parser.AddCommand("gen-csv", ...)
+	parser.AddCommand("gen-csv", "Generate synthetic CSV", "Generate synthetic CSV test data for a given type", &GenCSVCommand{})
 
 	if _, err := parser.Parse(); err != nil {
 		if flagsErr, ok := err.(*flags.Error); ok {
