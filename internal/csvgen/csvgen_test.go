@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	csvpkg "github.com/corruptmemory/file-uploader-r3/internal/csv"
 )
@@ -173,8 +174,9 @@ func isCorruptedRow(row map[string]string, headers []string) bool {
 		if val == "XX" || val == "ZZ" || val == "QQ" {
 			return true
 		}
-		// Check for future dates (year > 2025)
-		if strings.Contains(val, "2031-") {
+		// Check for future dates injected by error injection (5 years from now)
+		futureYear := fmt.Sprintf("%d-", time.Now().AddDate(5, 0, 0).Year())
+		if strings.Contains(val, futureYear) {
 			return true
 		}
 	}

@@ -16,8 +16,7 @@ type GenCSVCommand struct {
 	Output       string  `long:"output" description:"Output file path (default: stdout)"`
 	InjectErrors bool    `long:"inject-errors" description:"Enable error injection"`
 	ErrorRate    float64 `long:"error-rate" default:"0.1" description:"Fraction of error rows (0.0-1.0)"`
-	Seed         int64   `long:"seed" description:"Random seed for deterministic output"`
-	SeedSet      bool    // internal: tracks whether --seed was explicitly provided
+	Seed         *int64  `long:"seed" description:"Random seed for deterministic output"`
 }
 
 // Execute runs the gen-csv subcommand.
@@ -37,11 +36,11 @@ func (g *GenCSVCommand) Execute(args []string) error {
 
 	var opts []csvgen.Option
 
-	// If seed was explicitly set via flag, use it; otherwise use random
-	if g.Seed != 0 {
-		opts = append(opts, csvgen.WithSeed(g.Seed))
+	// If seed was explicitly provided via --seed, use it (including 0);
+	// otherwise use time-based seed for non-deterministic output.
+	if g.Seed != nil {
+		opts = append(opts, csvgen.WithSeed(*g.Seed))
 	} else {
-		// Use time-based seed for non-deterministic output
 		opts = append(opts, csvgen.WithSeed(time.Now().UnixNano()))
 	}
 
