@@ -114,7 +114,11 @@ func (q Quoted) String() string {
 	return strings.TrimRight(buf.String(), "\n")
 }
 
-// Raw wraps a string value that should be used as-is.
+// Raw wraps a string value that should be used as-is with no CSV escaping.
+// SECURITY: Raw must only be used with values that are program-generated or fully
+// validated (parsed integers, parsed floats, hash outputs, EmptyString). Never use
+// Raw with user-controlled input — this would create a CSV formula injection vector
+// for payloads starting with =, +, -, or @.
 type Raw string
 
 // String returns the raw string value.

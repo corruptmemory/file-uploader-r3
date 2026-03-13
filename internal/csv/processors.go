@@ -2,6 +2,7 @@ package csv
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -60,7 +61,7 @@ func parseFlexBool(in string) (bool, error) {
 	if falsyValues[lower] {
 		return false, nil
 	}
-	return false, fmt.Errorf("invalid boolean value: %q", in)
+	return false, fmt.Errorf("invalid boolean value")
 }
 
 // NonNilFlexBool returns a processor that parses flexible boolean values.
@@ -115,7 +116,7 @@ func NonNillableInt(in, out string) InColumnProcessor {
 			}
 			v, err := strconv.Atoi(s)
 			if err != nil {
-				return nil, fmt.Errorf("invalid integer: %q", s)
+				return nil, fmt.Errorf("invalid integer value")
 			}
 			return Raw(strconv.Itoa(v)), nil
 		},
@@ -134,7 +135,7 @@ func NonNillableNonNegInt(in, out string) InColumnProcessor {
 			}
 			v, err := strconv.Atoi(s)
 			if err != nil {
-				return nil, fmt.Errorf("invalid integer: %q", s)
+				return nil, fmt.Errorf("invalid integer value")
 			}
 			if v < 0 {
 				return nil, fmt.Errorf("value must be non-negative, got %d", v)
@@ -156,7 +157,7 @@ func NillableInt(in, out string) InColumnProcessor {
 			}
 			v, err := strconv.Atoi(s)
 			if err != nil {
-				return nil, fmt.Errorf("invalid integer: %q", s)
+				return nil, fmt.Errorf("invalid integer value")
 			}
 			return Raw(strconv.Itoa(v)), nil
 		},
@@ -175,7 +176,7 @@ func NillableNonNegInt(in, out string) InColumnProcessor {
 			}
 			v, err := strconv.Atoi(s)
 			if err != nil {
-				return nil, fmt.Errorf("invalid integer: %q", s)
+				return nil, fmt.Errorf("invalid integer value")
 			}
 			if v < 0 {
 				return nil, fmt.Errorf("value must be non-negative, got %d", v)
@@ -199,7 +200,10 @@ func NonNilFloat64Full(in, out string) InColumnProcessor {
 			}
 			v, err := strconv.ParseFloat(s, 64)
 			if err != nil {
-				return nil, fmt.Errorf("invalid float: %q", s)
+				return nil, fmt.Errorf("invalid float value")
+			}
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return nil, fmt.Errorf("NaN and Inf are not valid float values")
 			}
 			return Raw(fmt.Sprintf("%g", v)), nil
 		},
@@ -218,10 +222,13 @@ func NonNilNonNegFloat64Full(in, out string) InColumnProcessor {
 			}
 			v, err := strconv.ParseFloat(s, 64)
 			if err != nil {
-				return nil, fmt.Errorf("invalid float: %q", s)
+				return nil, fmt.Errorf("invalid float value")
+			}
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return nil, fmt.Errorf("NaN and Inf are not valid float values")
 			}
 			if v < 0 {
-				return nil, fmt.Errorf("value must be non-negative, got %g", v)
+				return nil, fmt.Errorf("value must be non-negative")
 			}
 			return Raw(fmt.Sprintf("%g", v)), nil
 		},
@@ -240,7 +247,10 @@ func NillableFloat64Full(in, out string) InColumnProcessor {
 			}
 			v, err := strconv.ParseFloat(s, 64)
 			if err != nil {
-				return nil, fmt.Errorf("invalid float: %q", s)
+				return nil, fmt.Errorf("invalid float value")
+			}
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return nil, fmt.Errorf("NaN and Inf are not valid float values")
 			}
 			return Raw(fmt.Sprintf("%g", v)), nil
 		},
@@ -259,10 +269,13 @@ func NillableNonNegFloat64Full(in, out string) InColumnProcessor {
 			}
 			v, err := strconv.ParseFloat(s, 64)
 			if err != nil {
-				return nil, fmt.Errorf("invalid float: %q", s)
+				return nil, fmt.Errorf("invalid float value")
+			}
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return nil, fmt.Errorf("NaN and Inf are not valid float values")
 			}
 			if v < 0 {
-				return nil, fmt.Errorf("value must be non-negative, got %g", v)
+				return nil, fmt.Errorf("value must be non-negative")
 			}
 			return Raw(fmt.Sprintf("%g", v)), nil
 		},
@@ -333,7 +346,7 @@ func parseDateTime(s string) (time.Time, error) {
 			return t, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("unable to parse datetime: %q", s)
+	return time.Time{}, fmt.Errorf("unable to parse datetime value")
 }
 
 func parseDate(s string) (time.Time, error) {
@@ -343,7 +356,7 @@ func parseDate(s string) (time.Time, error) {
 			return t, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("unable to parse date: %q", s)
+	return time.Time{}, fmt.Errorf("unable to parse date value")
 }
 
 // DateAndTimeNonZeroAndNotAfterNow returns a processor for non-nil datetimes.
@@ -425,11 +438,11 @@ func NonNillMMDDYYYY(in, out string) InColumnProcessor {
 				return nil, fmt.Errorf("value is required")
 			}
 			if len(s) != 8 {
-				return nil, fmt.Errorf("expected 8-digit MMDDYYYY, got %q", s)
+				return nil, fmt.Errorf("expected 8-digit MMDDYYYY value")
 			}
 			t, err := time.Parse("01022006", s)
 			if err != nil {
-				return nil, fmt.Errorf("invalid MMDDYYYY date: %q", s)
+				return nil, fmt.Errorf("invalid MMDDYYYY date value")
 			}
 			return Quoted(t.Format("2006-01-02")), nil
 		},
@@ -465,11 +478,11 @@ func NonNillableHHMMSSTime(in, out string) InColumnProcessor {
 				return nil, fmt.Errorf("value is required")
 			}
 			if len(s) != 6 {
-				return nil, fmt.Errorf("expected 6-digit HHMMSS, got %q", s)
+				return nil, fmt.Errorf("expected 6-digit HHMMSS value")
 			}
 			t, err := time.Parse("150405", s)
 			if err != nil {
-				return nil, fmt.Errorf("invalid HHMMSS time: %q", s)
+				return nil, fmt.Errorf("invalid HHMMSS time value")
 			}
 			return Quoted(t.Format("15:04:05")), nil
 		},
@@ -708,11 +721,11 @@ func (p *uniqueIDProcessor) Process(rowdata RowData) ([]CSVOutputString, error) 
 
 	if !usedFallback {
 		if len(last4SSN) != 4 {
-			return nil, fmt.Errorf("row %d: last 4 SSN must be exactly 4 characters, got %q", rowdata.RowIndex, last4SSN)
+			return nil, fmt.Errorf("row %d: last 4 SSN in column %q must be exactly 4 ASCII digits", rowdata.RowIndex, p.inLast4SSN)
 		}
 		for _, r := range last4SSN {
 			if r < '0' || r > '9' {
-				return nil, fmt.Errorf("row %d: last 4 SSN must be ASCII digits, got %q", rowdata.RowIndex, last4SSN)
+				return nil, fmt.Errorf("row %d: last 4 SSN in column %q must be exactly 4 ASCII digits", rowdata.RowIndex, p.inLast4SSN)
 			}
 		}
 	}

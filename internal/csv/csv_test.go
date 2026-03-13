@@ -271,6 +271,18 @@ func TestFloatProcessors(t *testing.T) {
 		{"NillableNonNegFloat64Full valid", NillableNonNegFloat64Full("in", "out"), "3.14", "3.14", false},
 		{"NillableNonNegFloat64Full empty", NillableNonNegFloat64Full("in", "out"), "", "", false},
 		{"NillableNonNegFloat64Full negative", NillableNonNegFloat64Full("in", "out"), "-1.5", "", true},
+		// NaN and Inf must be rejected by all float processors
+		{"NonNilFloat64Full NaN", NonNilFloat64Full("in", "out"), "NaN", "", true},
+		{"NonNilFloat64Full Inf", NonNilFloat64Full("in", "out"), "Inf", "", true},
+		{"NonNilFloat64Full +Inf", NonNilFloat64Full("in", "out"), "+Inf", "", true},
+		{"NonNilFloat64Full -Inf", NonNilFloat64Full("in", "out"), "-Inf", "", true},
+		{"NonNilFloat64Full nan", NonNilFloat64Full("in", "out"), "nan", "", true},
+		{"NonNilNonNegFloat64Full NaN", NonNilNonNegFloat64Full("in", "out"), "NaN", "", true},
+		{"NonNilNonNegFloat64Full +Inf", NonNilNonNegFloat64Full("in", "out"), "+Inf", "", true},
+		{"NillableFloat64Full NaN", NillableFloat64Full("in", "out"), "NaN", "", true},
+		{"NillableFloat64Full Inf", NillableFloat64Full("in", "out"), "Inf", "", true},
+		{"NillableNonNegFloat64Full NaN", NillableNonNegFloat64Full("in", "out"), "NaN", "", true},
+		{"NillableNonNegFloat64Full Inf", NillableNonNegFloat64Full("in", "out"), "Inf", "", true},
 	}
 
 	for _, tt := range tests {
@@ -737,6 +749,35 @@ func TestUniqueIDProcessor(t *testing.T) {
 	_, err = proc.Process(row)
 	if err == nil {
 		t.Error("expected error for non-digit SSN")
+	}
+}
+
+func TestUniqueIDSSNNotInErrorMessages(t *testing.T) {
+	hasher := func(lastName, firstName, last4SSN, dob string) string { return "uid" }
+	proc := UniqueIDDefault(hasher)
+
+	// Short SSN - error must not contain the SSN value
+	row := RowData{RowIndex: 1, RowMap: map[string]string{
+		"LastName": "Smith", "FirstName": "John", "Last4SSN": "123", "DOB": "1990-05-15",
+	}}
+	_, err := proc.Process(row)
+	if err == nil {
+		t.Fatal("expected error for short SSN")
+	}
+	if strings.Contains(err.Error(), "123") {
+		t.Errorf("SSN fragment leaked in error message: %s", err.Error())
+	}
+
+	// Non-digit SSN - error must not contain the SSN value
+	row = RowData{RowIndex: 1, RowMap: map[string]string{
+		"LastName": "Smith", "FirstName": "John", "Last4SSN": "ab9d", "DOB": "1990-05-15",
+	}}
+	_, err = proc.Process(row)
+	if err == nil {
+		t.Fatal("expected error for non-digit SSN")
+	}
+	if strings.Contains(err.Error(), "ab9d") {
+		t.Errorf("SSN value leaked in error message: %s", err.Error())
 	}
 }
 

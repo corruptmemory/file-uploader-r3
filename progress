@@ -25,3 +25,10 @@ Status: DONE
 Files: internal/hashers/hashers.go, internal/hashers/subdivisions.go, internal/hashers/hashers_test.go, go.mod, go.sum
 Notes: Hashers interface and PlayerDataHasher implementation with Argon2id (time=3, mem=32*1024, par=4, keyLen=32); PlayerDB interface for dependency inversion; ProcessName iterative normalization (diacriticals, punctuation, hyphens, whitespace, lowercase); GetCountrySubdivisions with US/USA support (51 codes); OrganizationPlayerIDHasher uses colon-delimited country+state in hash input and PlayerDB cache
 Testable: ./build.sh -t runs all tests including 16 ProcessName cases, argon2 regression/determinism, cache behavior, country/state validation
+
+## Spec 05: CSV Framework (05-csv-framework.md)
+Status: DONE
+Files: internal/csv/types.go, internal/csv/processors.go, internal/csv/metadata.go, internal/csv/csv_test.go
+Notes: CSVType enum (types 2-11) with String/Slug/FromSlug/AllCSVTypes; RowData, CSVOutputString (Quoted/Raw), CSVOutputRow core types; InColumnProcessor interface with bool (NonNil/Nillable FlexBool), int (4 variants), float (4 variants), string (2 variants with char-based maxLen), datetime (6 variants covering RFC3339/ISO8601/MMDDYYYY/HHMMSS/birth year); ConstantString, MetaID (4 variants), MetaIDFixedLocation, UniqueID (3 variants), CountryAndState processors; CSVMetadata interface with simpleCSVMetadata (case-sensitive header matching, sequential row processing)
+Security fixes: Float processors reject NaN/Inf; SSN values redacted from error messages; all processor errors no longer echo raw input values; Raw type has security comment
+Testable: ./build.sh -t runs all tests across 6 packages
