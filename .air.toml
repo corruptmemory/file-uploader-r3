@@ -1,0 +1,39 @@
+root = "."
+testdata_dir = "testdata"
+tmp_dir = "tmp"
+
+[build]
+  bin = "./file-uploader -p 8080"
+  cmd = "./build.sh -G -b"
+  delay = 1000
+  exclude_dir = ["assets", "tmp", "vendor", "testdata", "data-processing", "players-db"]
+  exclude_file = ["file-uploader.toml"]
+  exclude_regex = ["_test.go"]
+  exclude_unchanged = false
+  follow_symlink = false
+  include_ext = ["go", "js", "css", "jpg", "gif", "ico", "png", "toml", "txt", "svg"]
+  kill_delay = "0s"
+  log = "build-errors.log"
+  poll = false
+  rerun = false
+  rerun_delay = 500
+  send_interrupt = false
+  stop_on_error = false
+
+[color]
+  app = ""
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[log]
+  main_only = false
+  time = false
+
+[misc]
+  clean_on_exit = false
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true

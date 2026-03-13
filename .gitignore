@@ -1,0 +1,7 @@
+file-uploader
+tmp/
+*.log
+data-processing/
+players-db/
+mock-output/
+file-uploader.toml

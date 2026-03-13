@@ -1,0 +1,7 @@
+# Progress
+
+## Spec 01: Project scaffold (01-project-scaffold.md)
+Status: DONE
+Files: build.sh, go.mod, go.sum, main.go, settables.go, embed.go, .air.toml, .gitignore, static/*, templates/, internal/
+Notes: Full scaffold with build script, ldflags, static asset embedding, htmx vendored
+Testable: ./file-uploader -v prints version, ./file-uploader -h prints help, ./build.sh -b compiles
