@@ -24,7 +24,6 @@ type Hashers interface {
 type PlayerDB interface {
 	GetPlayerByOrgPlayerID(playerID, country, state string) (metaID string, found bool)
 	AddEntry(metaID, playerID, country, state string)
-	Save(path string) error
 }
 
 // PlayerDataHasher implements the Hashers interface using Argon2id hashing.
@@ -89,8 +88,13 @@ func (h *PlayerDataHasher) OrganizationPlayerIDHasher(playerID, country, state s
 }
 
 // SaveDB persists the PlayerDB to disk at the configured path.
+// Uses a type assertion since Save is an implementation detail, not part of PlayerDB.
 func (h *PlayerDataHasher) SaveDB() error {
-	return h.playersdb.Save(h.dbPath)
+	type saver interface{ Save(path string) error }
+	if s, ok := h.playersdb.(saver); ok {
+		return s.Save(h.dbPath)
+	}
+	return nil
 }
 
 // Compile-time check that PlayerDataHasher implements Hashers.

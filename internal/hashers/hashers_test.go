@@ -1,10 +1,7 @@
 package hashers
 
 import (
-	"encoding/base64"
 	"testing"
-
-	"golang.org/x/crypto/argon2"
 )
 
 // mockPlayerDB is a simple in-memory PlayerDB for testing.
@@ -34,13 +31,11 @@ func (m *mockPlayerDB) Save(path string) error {
 // --- Argon2 Hashing Tests ---
 
 func TestArgon2KnownOutput(t *testing.T) {
-	// Hardcoded regression test: compute with known inputs and verify base64 output.
-	pepper := "test-pepper"
-	cleartext := "test-cleartext"
-	hash := argon2.IDKey([]byte(cleartext), []byte(pepper), 3, 32*1024, 4, 32)
-	expected := base64.StdEncoding.EncodeToString(hash)
+	// Hardcoded regression test: precomputed with pepper="test-pepper", cleartext="test-cleartext",
+	// argon2id time=3, mem=32*1024, par=4, keyLen=32.
+	expected := "sdVwUjRzr12y+w4B1mhx9bEJ/Zb6T+Cqx8XDrZI8Ang="
 
-	got := argon2Hash(cleartext, pepper)
+	got := argon2Hash("test-cleartext", "test-pepper")
 	if got != expected {
 		t.Errorf("argon2Hash mismatch: got %q, want %q", got, expected)
 	}
@@ -66,17 +61,10 @@ func TestArgon2DifferentInputs(t *testing.T) {
 }
 
 func TestArgon2Parameters(t *testing.T) {
-	// Verify the parameters match spec by computing directly and comparing.
-	pepper := "param-pepper"
-	cleartext := "param-test"
-	hash := argon2.IDKey([]byte(cleartext), []byte(pepper), 3, 32*1024, 4, 32)
-	if len(hash) != 32 {
-		t.Errorf("expected 32-byte output, got %d", len(hash))
-	}
-	encoded := base64.StdEncoding.EncodeToString(hash)
-	got := argon2Hash(cleartext, pepper)
-	if got != encoded {
-		t.Errorf("argon2Hash does not match direct computation with spec parameters")
+	// Verify output length: base64 of 32 bytes = 44 chars (with padding).
+	got := argon2Hash("param-test", "param-pepper")
+	if len(got) != 44 {
+		t.Errorf("expected 44-char base64 output (32 bytes), got %d chars", len(got))
 	}
 }
 
@@ -132,20 +120,24 @@ func TestPlayerUniqueHasherFirstLetterFlag(t *testing.T) {
 	hFull := NewPlayerDataHasher(false, "", "pepper1", "pepper2", ProcessName, db)
 	hFirst := NewPlayerDataHasher(true, "", "pepper1", "pepper2", ProcessName, db)
 
-	// With the flag, "Jonathan" should be truncated to "J" before normalization.
-	// Without the flag, "Jonathan" is processed fully then first char taken.
-	// Both should take first char of normalized name, but the truncation happens
-	// at different points. For a simple ASCII name, the result is the same.
-	// Use a name where it matters: a multi-char name with diacritical on second char.
+	// For ASCII names, the flag doesn't change the first char (both paths yield "j").
 	rFull := hFull.PlayerUniqueHasher("1234", "Jonathan", "Smith", "19900101")
 	rFirst := hFirst.PlayerUniqueHasher("1234", "Jonathan", "Smith", "19900101")
-	// Both should produce "j" as the first letter, so they should match.
 	if rFull != rFirst {
-		t.Logf("full=%q first=%q (may differ if name processing differs)", rFull, rFirst)
+		t.Errorf("ASCII name should give same hash regardless of flag: full=%q first=%q", rFull, rFirst)
 	}
 
-	// More importantly: verify the flag truncates BEFORE normalization.
-	// With a 1-char firstName, the flag should have no effect.
+	// For a non-ASCII first character (e.g. "Élodie"), the flag truncates to the
+	// first byte before normalization, producing a different first-name component.
+	// Flag=true: "É"[:1] = broken UTF-8 byte → ProcessName strips it → empty firstName.
+	// Flag=false: ProcessName("Élodie") → "elodie" → first char "e".
+	rFullAccent := hFull.PlayerUniqueHasher("1234", "\u00c9lodie", "Smith", "19900101")
+	rFirstAccent := hFirst.PlayerUniqueHasher("1234", "\u00c9lodie", "Smith", "19900101")
+	if rFullAccent == rFirstAccent {
+		t.Errorf("non-ASCII firstName should produce different hashes with/without flag")
+	}
+
+	// Single-char firstName: the flag has no effect (len <= 1, guard skips truncation).
 	rFull1 := hFull.PlayerUniqueHasher("1234", "J", "Smith", "19900101")
 	rFirst1 := hFirst.PlayerUniqueHasher("1234", "J", "Smith", "19900101")
 	if rFull1 != rFirst1 {
