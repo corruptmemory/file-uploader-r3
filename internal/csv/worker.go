@@ -163,8 +163,7 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("opening file: %w", err))
 		return
 	}
-	// No defer — we close explicitly after counting rows (line ~194).
-	// The file is not needed after that; the feeder re-opens it.
+	defer inFile.Close()
 
 	bomReader := utfbom.SkipOnly(inFile)
 	csvReader := csv.NewReader(bomReader)
@@ -191,9 +190,6 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("counting rows: %w", err))
 		return
 	}
-	// Done with the input file for counting; close it now.
-	inFile.Close()
-
 	progress.TotalRows = totalRows
 
 	// 5. Create output file
