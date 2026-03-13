@@ -5,3 +5,9 @@ Status: DONE
 Files: build.sh, go.mod, go.sum, main.go, settables.go, embed.go, .air.toml, .gitignore, static/*, templates/, internal/
 Notes: Full scaffold with build script, ldflags, static asset embedding, htmx vendored
 Testable: ./file-uploader -v prints version, ./file-uploader -h prints help, ./build.sh -b compiles
+
+## Spec 02: Channel utilities and core interfaces (02-chanutil-and-interfaces.md)
+Status: DONE
+Files: internal/chanutil/chanutil.go, internal/chanutil/chanutil_test.go, internal/app/app.go
+Notes: Generic SendReceiveMessage, SendReceiveError, SendReceiveErrorOrOK with panic recovery; WithResulter interface; Stoppable interface
+Testable: ./build.sh -t runs 10 tests covering typed results, errors, closed channels, buffered capacity
