@@ -163,7 +163,8 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		wu.eventSink.Failure(outMeta, progress, fmt.Errorf("opening file: %w", err))
 		return
 	}
-	defer inFile.Close()
+	// No defer — we close explicitly after counting rows (line ~194).
+	// The file is not needed after that; the feeder re-opens it.
 
 	bomReader := utfbom.SkipOnly(inFile)
 	csvReader := csv.NewReader(bomReader)
@@ -245,28 +246,33 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		}()
 	}
 
-	// Launch feeder goroutine: re-open file, BOM-strip, skip header line, then feed rows.
-	// The reader passed to CSVToChanMaps is already positioned after the header.
+	// Launch feeder goroutine: re-open file, BOM-strip, skip header via csv.Reader, then feed rows.
+	// Errors are sent on feederErrCh so the main loop can emit Failure instead of Success.
+	feederErrCh := make(chan error, 1)
 	go func() {
+		defer close(feederErrCh)
 		f, err := os.Open(wu.file.LocalFilePath)
 		if err != nil {
-			p.log.Printf("feeder open error: %v", err)
+			feederErrCh <- fmt.Errorf("feeder open error: %w", err)
 			close(inputCh)
 			return
 		}
 		defer f.Close()
 
 		br := bufio.NewReader(utfbom.SkipOnly(f))
-		// Skip header line so reader is positioned at first data row
+		// Skip header line with ReadString rather than csv.NewReader().Read() because
+		// csv.NewReader buffers ahead, consuming bytes from br that CSVToChanMaps
+		// would then miss. All 10 CSV types use simple single-line headers, so
+		// ReadString('\n') is safe and correct here.
 		if _, err := br.ReadString('\n'); err != nil {
-			p.log.Printf("feeder header skip error: %v", err)
+			feederErrCh <- fmt.Errorf("feeder header skip error: %w", err)
 			close(inputCh)
 			return
 		}
 
 		err = CSVToChanMaps(procCtx, br, headers, inputCh)
 		if err != nil && err != context.Canceled {
-			p.log.Printf("feeder error: %v", err)
+			feederErrCh <- fmt.Errorf("feeder error: %w", err)
 		}
 	}()
 
@@ -283,7 +289,6 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		if result.err != nil {
 			processingErr = result.err
 			cancel() // Cancel workers + feeder
-			wu.eventSink.Failure(outMeta, progress, processingErr)
 			// Drain remaining output
 			for range outputCh {
 			}
@@ -293,7 +298,6 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		if _, err := outWriter.WriteString(line); err != nil {
 			processingErr = fmt.Errorf("writing output row: %w", err)
 			cancel()
-			wu.eventSink.Failure(outMeta, progress, processingErr)
 			for range outputCh {
 			}
 			break
@@ -306,16 +310,26 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 		wu.eventSink.Progress(outMeta, progress)
 	}
 
+	// Check for feeder errors that wouldn't surface as worker errors.
+	// If the feeder failed (e.g. couldn't re-open file), workers saw no input,
+	// outputCh drained immediately, and processingErr is still nil.
+	if feederErr, ok := <-feederErrCh; ok && feederErr != nil && processingErr == nil {
+		processingErr = feederErr
+	}
+
 	if err := outWriter.Flush(); err != nil && processingErr == nil {
 		processingErr = fmt.Errorf("flushing output: %w", err)
 	}
 	outFile.Close()
 
+	// Emit final outcome — Success or Failure — exactly once.
 	if processingErr == nil {
 		wu.eventSink.Success(outMeta)
-	} else if outMeta.OutPath != "" {
-		// Clean up partial output file on failure
-		os.Remove(outMeta.OutPath)
+	} else {
+		wu.eventSink.Failure(outMeta, progress, processingErr)
+		if outMeta.OutPath != "" {
+			os.Remove(outMeta.OutPath)
+		}
 	}
 }
 

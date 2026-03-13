@@ -601,6 +601,63 @@ func TestNoMatchHeadersFailure(t *testing.T) {
 	}
 }
 
+func TestFeederReopenFailureEmitsFailure(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a valid Casino Par Sheet CSV
+	realPath := writeCasinoParSheetCSV(t, dir, 3)
+	// Create a symlink — processor will read through the symlink
+	linkPath := filepath.Join(dir, "link.csv")
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &testEventSink{}
+	h := &testHashers{}
+	log := &testLogger{t: t}
+
+	// Custom detect func that removes the real file after detection succeeds,
+	// so the feeder's re-open of the symlink will fail.
+	deletingDetect := func(headers []string, allMetadata []csv.CSVMetadata) (csv.CSVMetadata, error) {
+		meta, err := columnmapping.DetectCSVType(headers, allMetadata)
+		if err != nil {
+			return nil, err
+		}
+		// Remove real file — the symlink now points to nothing
+		os.Remove(realPath)
+		return meta, nil
+	}
+
+	ctx := context.Background()
+	proc := csv.NewProcessor(ctx, log, 10, 2, workDir, deletingDetect, wrapBuildMeta)
+
+	proc.AddWork(csv.FileMetadata{
+		ID:               "test-feeder-fail",
+		OriginalFilename: "link.csv",
+		LocalFilePath:    linkPath,
+		UploadedAt:       time.Now(),
+	}, h, sink, csv.Quoted("OP1"))
+
+	proc.Stop()
+	proc.Wait()
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+
+	if len(sink.successes) != 0 {
+		t.Error("expected no Success events when feeder cannot re-open file")
+	}
+	if len(sink.failures) == 0 {
+		t.Error("expected Failure event when feeder cannot re-open file")
+	} else if !strings.Contains(sink.failures[0].err.Error(), "feeder open error") {
+		t.Errorf("expected feeder open error, got: %v", sink.failures[0].err)
+	}
+}
+
 func TestBOMStripping(t *testing.T) {
 	dir := t.TempDir()
 	workDir := filepath.Join(dir, "out")

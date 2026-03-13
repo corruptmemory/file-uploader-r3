@@ -34,7 +34,7 @@ func DetectCSVType(headers []string, allMetadata []csv.CSVMetadata) (csv.CSVMeta
 	}
 	switch len(matches) {
 	case 0:
-		return nil, fmt.Errorf("no CSV type matches the given headers")
+		return nil, fmt.Errorf("no CSV type matched the headers in this file")
 	case 1:
 		return matches[0], nil
 	default:
@@ -42,7 +42,7 @@ func DetectCSVType(headers []string, allMetadata []csv.CSVMetadata) (csv.CSVMeta
 		for i, m := range matches {
 			types[i] = m.Type().String()
 		}
-		return nil, fmt.Errorf("ambiguous CSV type: %d types match the given headers: %v", len(matches), types)
+		return nil, fmt.Errorf("multiple CSV types matched: %v", types)
 	}
 }
 
