@@ -1,0 +1,25 @@
+[Unit]
+Description=File Uploader - CSV Processing and Data Synchronization
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=file-uploader
+Group=file-uploader
+WorkingDirectory=/opt/file-uploader
+ExecStart=/opt/file-uploader/file-uploader -c /opt/file-uploader/file-uploader.toml
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=file-uploader
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/file-uploader/data
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

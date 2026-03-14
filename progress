@@ -87,4 +87,11 @@ Testable: ./build.sh -t runs all tests across 14 packages including 8 spec-requi
 Status: DONE
 Files: internal/server/pages/placeholders.templ (replaced with real implementations), internal/server/pages/login.templ (updated for conditional MFA and htmx), internal/server/webapp.go (updated all handlers), internal/server/server_test.go (added 17 tests), static/css/app.css (added .text-danger and .navbar-logout-form)
 Notes: Archive page with status/type/text filters, htmx live filtering with 300ms debounce, failure detail modal. Settings page with read-only API endpoint, separate registration code form, pepper/hash/use-players-db form with per-field validation errors. Players DB page with enabled/disabled states and download. Login page with conditional MFA field, htmx POST with HX-Redirect on success, error preservation on failure. Registration code handler calling AuthProvider.ConsumeRegistrationCode
+Dev test fixes: (1) GetFinishedDetails returns error for missing records (404 not 200); (2) ValidateSettingsPageValues validates only user-editable fields (pepper/hash/use_players_db); (3) Converted all sync.Mutex usage to goroutine actor pattern (TokenBlacklist, rateLimiter, PlayerDataHasher)
 Testable: ./build.sh -t runs all tests across 14 packages including 17 spec-14 tests
+
+## Spec 15: Build, Embed, and Deploy (15-build-and-deploy.md)
+Status: DONE
+Files: build.sh (updated dist/docker), Dockerfile, docker-entrypoint.sh, file-uploader.service, install-systemd.sh, INSTALL.md, .air.toml (updated), settables_test.go, internal/server/server_test.go (added MIME/embed tests), internal/server/testdata/static/css/tokens.css
+Notes: build.sh dist (-d) packages binary+config+deploy files into tar.gz and zip. Docker build (-D) creates Alpine image. Systemd unit with security hardening (NoNewPrivileges, ProtectSystem=strict, ReadWritePaths). Install script creates system user and directory structure. Static assets embedded and served with correct MIME types. Version metadata embedded via ldflags
+Testable: ./build.sh -t runs all tests across 14 packages including spec-15 static asset MIME type tests and version metadata tests

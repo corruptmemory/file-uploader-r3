@@ -173,13 +173,111 @@ fi
 # --- Dist ---
 if $do_dist; then
     echo "==> Building distribution archive"
-    # Placeholder for distribution build
-    echo "    Distribution build not yet implemented"
+
+    if [[ -z "$api_env" || -z "$api_endpoint" ]]; then
+        echo "ERROR: --api-env and --api-endpoint are required for distribution build" >&2
+        exit 1
+    fi
+
+    # Resolve version
+    version="$head_version_tag"
+    if [[ -z "$version" ]]; then
+        echo "WARNING: No version tag on HEAD, using git describe" >&2
+        version="$describe_version"
+        if [[ -z "$version" ]]; then
+            version="dev-${sha:0:8}"
+        fi
+    fi
+
+    # Generate JWT key if not provided
+    if [[ -z "$jwt_key" ]]; then
+        jwt_key="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+        echo "    Generated random JWT signing key"
+    fi
+
+    # Build binary
+    echo "    Building binary for distribution..."
+    do_clean=true
+    do_generate=true
+    do_templ=true
+
+    echo "==> Cleaning"
+    go clean .
+    rm -f file-uploader
+
+    if ! command -v stringer &>/dev/null; then
+        echo "==> Installing stringer"
+        go install golang.org/x/tools/cmd/stringer@latest
+    fi
+    echo "==> Running go generate"
+    go generate -v ./...
+
+    if ! command -v templ &>/dev/null; then
+        echo "==> Installing templ"
+        go install github.com/a-h/templ/cmd/templ@latest
+    fi
+    echo "==> Running templ generate"
+    templ generate
+
+    echo "==> Building"
+    CGO_ENABLED=0 go build -ldflags "
+        -X main.PublicAPIEnvironment=${api_env}
+        -X main.PublicAPIEndpoint=${api_endpoint}
+        -X main.ConfigVersion=1
+        -X main.GitSHA=${sha}
+        -X main.DirtyBuild=${dirty}
+        -X 'main.GitFullVersionDescription=${describe_all}'
+        -X 'main.GitDescribeVersion=${describe_version}'
+        -X 'main.GitLastCommitDate=${last_commit_date}'
+        -X main.GitVersion=${head_version_tag}
+        -X main.SnapshotBuild=${snapshot}
+    " -v -o file-uploader .
+
+    # Generate starter TOML config
+    echo "    Generating starter config..."
+    ./file-uploader gen-config > file-uploader.toml.tmp
+    # Patch in the signing key
+    sed -i "s/^signing-key = .*/signing-key = \"${jwt_key}\"/" file-uploader.toml.tmp
+
+    # Create dist directory
+    dist_name="file-uploader-${version}"
+    rm -rf "dist/${dist_name}"
+    mkdir -p "dist/${dist_name}"
+
+    # Copy files
+    cp file-uploader "dist/${dist_name}/"
+    cp file-uploader.toml.tmp "dist/${dist_name}/file-uploader.toml"
+    cp Dockerfile "dist/${dist_name}/"
+    cp docker-entrypoint.sh "dist/${dist_name}/"
+    cp install-systemd.sh "dist/${dist_name}/"
+    cp file-uploader.service "dist/${dist_name}/"
+    cp INSTALL.md "dist/${dist_name}/"
+
+    # Package
+    echo "    Creating archives..."
+    (cd dist && tar czf "${dist_name}.tar.gz" "${dist_name}/")
+    (cd dist && zip -rq "${dist_name}.zip" "${dist_name}/")
+
+    # Clean up
+    rm -f file-uploader.toml.tmp
+
+    echo "    Distribution archives created:"
+    echo "      dist/${dist_name}.tar.gz"
+    echo "      dist/${dist_name}.zip"
 fi
 
 # --- Docker ---
 if $do_docker; then
     echo "==> Building Docker image"
-    # Placeholder for Docker build
-    echo "    Docker build not yet implemented"
+
+    # Generate starter TOML config for Docker
+    ./file-uploader gen-config > file-uploader.toml.tmp
+
+    # Build Docker image
+    docker build -t "file-uploader:${tagname}" .
+
+    # Clean up
+    rm -f file-uploader.toml.tmp
+
+    echo "    Docker image built: file-uploader:${tagname}"
 fi

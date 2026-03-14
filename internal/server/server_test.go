@@ -322,6 +322,105 @@ func TestStaticAssetsServed(t *testing.T) {
 	}
 }
 
+func TestStaticAssetsEmbeddedAndMIMETypes(t *testing.T) {
+	ts, cleanup := newTestWebApp(t)
+	defer cleanup()
+
+	tests := []struct {
+		name         string
+		path         string
+		wantStatus   int
+		wantContains string // substring in Content-Type
+	}{
+		{
+			name:         "js/app.js serves with javascript MIME",
+			path:         "/js/app.js",
+			wantStatus:   http.StatusOK,
+			wantContains: "javascript",
+		},
+		{
+			name:         "js/sse.js serves with javascript MIME",
+			path:         "/js/sse.js",
+			wantStatus:   http.StatusOK,
+			wantContains: "javascript",
+		},
+		{
+			name:         "css/app.css serves with css MIME",
+			path:         "/css/app.css",
+			wantStatus:   http.StatusOK,
+			wantContains: "css",
+		},
+		{
+			name:         "css/tokens.css serves with css MIME",
+			path:         "/css/tokens.css",
+			wantStatus:   http.StatusOK,
+			wantContains: "css",
+		},
+		{
+			name:         "vendor/htmx.min.js serves with javascript MIME",
+			path:         "/vendor/htmx.min.js",
+			wantStatus:   http.StatusOK,
+			wantContains: "javascript",
+		},
+		{
+			name:       "favicon.ico serves with icon MIME",
+			path:       "/favicon.ico",
+			wantStatus: http.StatusOK,
+			wantContains: "icon",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + tt.path)
+			if err != nil {
+				t.Fatalf("GET %s: %v", tt.path, err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tt.wantStatus {
+				t.Errorf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+
+			ct := resp.Header.Get("Content-Type")
+			if !strings.Contains(ct, tt.wantContains) {
+				t.Errorf("Content-Type = %q, want it to contain %q", ct, tt.wantContains)
+			}
+
+			// Verify the body is non-empty (asset is actually embedded)
+			body, _ := io.ReadAll(resp.Body)
+			if len(body) == 0 {
+				t.Errorf("body is empty for %s", tt.path)
+			}
+		})
+	}
+}
+
+func TestHealthEndpointReturnsOK(t *testing.T) {
+	ts, cleanup := newTestWebApp(t)
+	defer cleanup()
+
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if got := strings.TrimSpace(string(body)); got != "ok" {
+		t.Errorf("body = %q, want %q", got, "ok")
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain", ct)
+	}
+}
+
 func TestLoginAndSessionCookies(t *testing.T) {
 	ts, cleanup := newTestWebApp(t)
 	defer cleanup()
