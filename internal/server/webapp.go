@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/a-h/templ"
@@ -27,66 +26,94 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// rateLimiter tracks request timestamps per IP for simple rate limiting.
-type rateLimiter struct {
-	mu       sync.Mutex
-	attempts map[string][]time.Time
-	maxReqs  int
-	window   time.Duration
+// rateLimitCmd is a query to check if an IP is allowed.
+type rateLimitCmd struct {
+	ip     string
+	result chan<- bool
 }
 
-// newRateLimiter creates a rate limiter allowing maxReqs requests per window per IP.
+// rateLimiter tracks request timestamps per IP for simple rate limiting.
+// A single goroutine owns the mutable state; callers communicate via channels.
+type rateLimiter struct {
+	cmdCh   chan rateLimitCmd
+	quit    chan struct{}
+	maxReqs int
+	window  time.Duration
+}
+
+// newRateLimiter creates a rate limiter allowing maxReqs requests per window per IP
+// and starts the actor goroutine.
 func newRateLimiter(maxReqs int, window time.Duration) *rateLimiter {
-	return &rateLimiter{
-		attempts: make(map[string][]time.Time),
-		maxReqs:  maxReqs,
-		window:   window,
+	rl := &rateLimiter{
+		cmdCh:   make(chan rateLimitCmd),
+		quit:    make(chan struct{}),
+		maxReqs: maxReqs,
+		window:  window,
+	}
+	go rl.run()
+	return rl
+}
+
+func (rl *rateLimiter) run() {
+	attempts := make(map[string][]time.Time)
+	for {
+		select {
+		case cmd := <-rl.cmdCh:
+			now := time.Now()
+			cutoff := now.Add(-rl.window)
+
+			// Evict old entries for this IP
+			times := attempts[cmd.ip]
+			valid := times[:0]
+			for _, t := range times {
+				if t.After(cutoff) {
+					valid = append(valid, t)
+				}
+			}
+
+			if len(valid) >= rl.maxReqs {
+				attempts[cmd.ip] = valid
+				cmd.result <- false
+				continue
+			}
+
+			attempts[cmd.ip] = append(valid, now)
+
+			// Periodically clean up other IPs
+			if len(attempts) > 100 {
+				for k, v := range attempts {
+					filtered := v[:0]
+					for _, t := range v {
+						if t.After(cutoff) {
+							filtered = append(filtered, t)
+						}
+					}
+					if len(filtered) == 0 {
+						delete(attempts, k)
+					} else {
+						attempts[k] = filtered
+					}
+				}
+			}
+
+			cmd.result <- true
+		case <-rl.quit:
+			return
+		}
 	}
 }
 
 // allow checks whether the given IP is within the rate limit. It records the
 // attempt and evicts stale entries.
 func (rl *rateLimiter) allow(ip string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+	ch := make(chan bool, 1)
+	rl.cmdCh <- rateLimitCmd{ip: ip, result: ch}
+	return <-ch
+}
 
-	now := time.Now()
-	cutoff := now.Add(-rl.window)
-
-	// Evict old entries for this IP
-	times := rl.attempts[ip]
-	valid := times[:0]
-	for _, t := range times {
-		if t.After(cutoff) {
-			valid = append(valid, t)
-		}
-	}
-
-	if len(valid) >= rl.maxReqs {
-		rl.attempts[ip] = valid
-		return false
-	}
-
-	rl.attempts[ip] = append(valid, now)
-
-	// Periodically clean up other IPs (every 100th call)
-	if len(rl.attempts) > 100 {
-		for k, v := range rl.attempts {
-			filtered := v[:0]
-			for _, t := range v {
-				if t.After(cutoff) {
-					filtered = append(filtered, t)
-				}
-			}
-			if len(filtered) == 0 {
-				delete(rl.attempts, k)
-			} else {
-				rl.attempts[k] = filtered
-			}
-		}
-	}
-
-	return true
+// close signals the actor goroutine to stop.
+func (rl *rateLimiter) close() {
+	close(rl.quit)
 }
 
 // clientIP extracts the client IP from a request, stripping the port.
@@ -704,7 +731,7 @@ func (wa *WebApp) handleSettingsPost(w http.ResponseWriter, r *http.Request, cla
 		WithUsePlayersDB(usePlayersDB)
 
 	// Validate
-	validErr := updated.ValidateSettableValues(nil)
+	validErr := updated.ValidateSettingsPageValues(nil)
 	if validErr != nil {
 		configErrors, ok := validErr.(*app.ApplicationConfigErrors)
 		if !ok {

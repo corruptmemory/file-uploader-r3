@@ -46,6 +46,7 @@ func TestRoundTrip(t *testing.T) {
 			// 2. Set up hashers and metadata
 			pdb := playerdb.NewMemDB(orgPepper)
 			h := hashers.NewPlayerDataHasher(false, filepath.Join(tmpDir, "players.db"), uniquePepper, orgPepper, hashers.ProcessName, pdb)
+			defer h.Close()
 			opID := csvpkg.Quoted(operatorID)
 			allMeta := columnmapping.BuildAllMetadata(h, opID)
 
@@ -132,6 +133,7 @@ func TestRoundTrip(t *testing.T) {
 			// same data should produce same MetaIDs
 			pdb2 := playerdb.NewMemDB(orgPepper)
 			h2 := hashers.NewPlayerDataHasher(false, filepath.Join(tmpDir, "players2.db"), uniquePepper, orgPepper, hashers.ProcessName, pdb2)
+			defer h2.Close()
 			allMeta2 := columnmapping.BuildAllMetadata(h2, opID)
 			handler2, err := columnmapping.DetectCSVType(headers, allMeta2)
 			if err != nil {

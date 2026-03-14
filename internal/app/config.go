@@ -231,3 +231,54 @@ func (c ApplicationConfig) ValidateSettableValues(logFunc func(string, ...any)) 
 	}
 	return nil
 }
+
+// ValidateSettingsPageValues validates only the fields editable on the settings page
+// (pepper, hash algorithm, use_players_db). Unlike ValidateSettableValues, it does
+// not validate endpoint, environment, or service credentials.
+func (c ApplicationConfig) ValidateSettingsPageValues(logFunc func(string, ...any)) error {
+	errs := &ApplicationConfigErrors{}
+
+	// OrgPlayerIDPepper: non-empty, min 5 chars
+	if c.OrgPlayerIDPepper == "" {
+		e := &ApplicationConfigError{Tag: ACEOrgPlayerIDPepper, Err: fmt.Errorf("must not be empty")}
+		errs.Add(e)
+		if logFunc != nil {
+			logFunc("validation error: %s", e.Error())
+		}
+	} else if len(c.OrgPlayerIDPepper) < 5 {
+		e := &ApplicationConfigError{Tag: ACEOrgPlayerIDPepper, Err: fmt.Errorf("must be at least 5 characters")}
+		errs.Add(e)
+		if logFunc != nil {
+			logFunc("validation error: %s", e.Error())
+		}
+	}
+
+	// OrgPlayerIDHash: must be known hasher name (only "argon2")
+	if c.OrgPlayerIDHash == "" {
+		e := &ApplicationConfigError{Tag: ACEOrgPlayerIDHash, Err: fmt.Errorf("must not be empty")}
+		errs.Add(e)
+		if logFunc != nil {
+			logFunc("validation error: %s", e.Error())
+		}
+	} else if c.OrgPlayerIDHash != "argon2" {
+		e := &ApplicationConfigError{Tag: ACEOrgPlayerIDHash, Err: fmt.Errorf("unknown hash algorithm %q, must be \"argon2\"", c.OrgPlayerIDHash)}
+		errs.Add(e)
+		if logFunc != nil {
+			logFunc("validation error: %s", e.Error())
+		}
+	}
+
+	// UsePlayersDB: must be "true" or "false"
+	if c.UsePlayersDB != "true" && c.UsePlayersDB != "false" {
+		e := &ApplicationConfigError{Tag: ACEUsePlayersDB, Err: fmt.Errorf("must be \"true\" or \"false\", got %q", c.UsePlayersDB)}
+		errs.Add(e)
+		if logFunc != nil {
+			logFunc("validation error: %s", e.Error())
+		}
+	}
+
+	if errs.HasErrors() {
+		return errs
+	}
+	return nil
+}

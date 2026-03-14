@@ -73,6 +73,7 @@ func TestArgon2Parameters(t *testing.T) {
 func TestPlayerUniqueHasherDeterministic(t *testing.T) {
 	db := newMockPlayerDB()
 	h := NewPlayerDataHasher(false, "", "pepper1", "pepper2", ProcessName, db)
+	defer h.Close()
 	r1 := h.PlayerUniqueHasher("1234", "John", "Smith", "19900101")
 	r2 := h.PlayerUniqueHasher("1234", "John", "Smith", "19900101")
 	if r1 != r2 {
@@ -83,6 +84,7 @@ func TestPlayerUniqueHasherDeterministic(t *testing.T) {
 func TestOrgPlayerIDHasherUsesCache(t *testing.T) {
 	db := newMockPlayerDB()
 	h := NewPlayerDataHasher(false, "", "pepper1", "pepper2", ProcessName, db)
+	defer h.Close()
 
 	// First call should compute and cache.
 	r1 := h.OrganizationPlayerIDHasher("P001", "US", "NJ")
@@ -107,6 +109,7 @@ func TestOrgPlayerIDHasherUsesCache(t *testing.T) {
 func TestOrgPlayerIDHasherIncludesCountryState(t *testing.T) {
 	db := newMockPlayerDB()
 	h := NewPlayerDataHasher(false, "", "pepper1", "pepper2", ProcessName, db)
+	defer h.Close()
 
 	r1 := h.OrganizationPlayerIDHasher("P001", "US", "NJ")
 	r2 := h.OrganizationPlayerIDHasher("P001", "US", "CA")
@@ -118,7 +121,9 @@ func TestOrgPlayerIDHasherIncludesCountryState(t *testing.T) {
 func TestPlayerUniqueHasherFirstLetterFlag(t *testing.T) {
 	db := newMockPlayerDB()
 	hFull := NewPlayerDataHasher(false, "", "pepper1", "pepper2", ProcessName, db)
+	defer hFull.Close()
 	hFirst := NewPlayerDataHasher(true, "", "pepper1", "pepper2", ProcessName, db)
+	defer hFirst.Close()
 
 	// For ASCII names, the flag doesn't change the first char (both paths yield "j").
 	rFull := hFull.PlayerUniqueHasher("1234", "Jonathan", "Smith", "19900101")

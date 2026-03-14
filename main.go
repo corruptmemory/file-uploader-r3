@@ -235,7 +235,7 @@ func (p *placeholderRunningApp) ProcessUploadedCSVFile(uploadedBy, originalFilen
 	return nil
 }
 func (p *placeholderRunningApp) GetFinishedDetails(recordID string) (*app.CSVFinishedFile, error) {
-	return nil, nil
+	return nil, fmt.Errorf("not found: %s", recordID)
 }
 func (p *placeholderRunningApp) GetState() (*app.RunningState, error) { return nil, nil }
 func (p *placeholderRunningApp) SearchFinished(status app.FinishedStatus, csvTypes []csv.CSVType, search string) ([]app.CSVFinishedFile, error) {

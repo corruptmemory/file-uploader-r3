@@ -207,6 +207,7 @@ func TestClearSessionCookies(t *testing.T) {
 
 func TestTokenBlacklistRevokeAndCheck(t *testing.T) {
 	bl := NewTokenBlacklist()
+	defer bl.Close()
 
 	jti := "test-jti-revoke"
 	expiry := time.Now().Add(5 * time.Minute)
@@ -229,19 +230,22 @@ func TestTokenBlacklistRevokeAndCheck(t *testing.T) {
 
 func TestTokenBlacklistAutoEvictsExpired(t *testing.T) {
 	bl := NewTokenBlacklist()
+	defer bl.Close()
 
-	// Add an already-expired entry
-	bl.entries["expired-jti"] = time.Now().Add(-1 * time.Minute)
+	// Add an already-expired entry via Revoke
+	bl.Revoke("expired-jti", time.Now().Add(-1*time.Minute))
 
-	// Revoke a new JTI — this triggers eviction
+	// Revoke a new JTI — this triggers eviction of the expired one
 	bl.Revoke("new-jti", time.Now().Add(5*time.Minute))
 
-	bl.mu.Lock()
-	_, hasExpired := bl.entries["expired-jti"]
-	bl.mu.Unlock()
-
-	if hasExpired {
+	// The expired JTI should have been evicted
+	if bl.IsRevoked("expired-jti") {
 		t.Error("expired JTI should have been evicted")
+	}
+
+	// The new JTI should still be there
+	if !bl.IsRevoked("new-jti") {
+		t.Error("new JTI should still be revoked")
 	}
 }
 

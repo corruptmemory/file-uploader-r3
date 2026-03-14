@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"regexp"
 	"strings"
-	"sync"
 	"unicode"
 
 	"golang.org/x/crypto/argon2"
@@ -27,18 +26,33 @@ type PlayerDB interface {
 	AddEntry(metaID, playerID, country, state string)
 }
 
+// orgPlayerIDCmd is a request to hash an organization player ID.
+type orgPlayerIDCmd struct {
+	playerID string
+	country  string
+	state    string
+	result   chan<- string
+}
+
+// saveDBCmd is a request to save the player database.
+type saveDBCmd struct {
+	result chan<- error
+}
+
 // PlayerDataHasher implements the Hashers interface using Argon2id hashing.
+// The actor goroutine owns access to playersdb for thread safety.
 type PlayerDataHasher struct {
-	mu                            sync.Mutex
 	useOnlyFirstLetterOfFirstName bool
-	dbPath                        string
 	uniqueIDPepper                string
 	orgPlayerIDPepper             string
 	nameProcessor                 func(string) string
-	playersdb                     PlayerDB
+	orgCmdCh                      chan orgPlayerIDCmd
+	saveCmdCh                     chan saveDBCmd
+	quit                          chan struct{}
 }
 
-// NewPlayerDataHasher creates a new PlayerDataHasher with the given configuration.
+// NewPlayerDataHasher creates a new PlayerDataHasher with the given configuration
+// and starts the actor goroutine.
 func NewPlayerDataHasher(
 	useOnlyFirstLetterOfFirstName bool,
 	dbPath string,
@@ -46,13 +60,41 @@ func NewPlayerDataHasher(
 	nameProcessor func(string) string,
 	playersdb PlayerDB,
 ) *PlayerDataHasher {
-	return &PlayerDataHasher{
+	h := &PlayerDataHasher{
 		useOnlyFirstLetterOfFirstName: useOnlyFirstLetterOfFirstName,
-		dbPath:                        dbPath,
 		uniqueIDPepper:                uniqueIDPepper,
 		orgPlayerIDPepper:             orgPlayerIDPepper,
 		nameProcessor:                 nameProcessor,
-		playersdb:                     playersdb,
+		orgCmdCh:                      make(chan orgPlayerIDCmd),
+		saveCmdCh:                     make(chan saveDBCmd),
+		quit:                          make(chan struct{}),
+	}
+	go h.run(playersdb, dbPath)
+	return h
+}
+
+func (h *PlayerDataHasher) run(playersdb PlayerDB, dbPath string) {
+	for {
+		select {
+		case cmd := <-h.orgCmdCh:
+			if metaID, found := playersdb.GetPlayerByOrgPlayerID(cmd.playerID, cmd.country, cmd.state); found {
+				cmd.result <- metaID
+				continue
+			}
+			cleartext := h.orgPlayerIDPepper + ":" + cmd.playerID + ":" + cmd.country + ":" + cmd.state
+			metaID := argon2Hash(cleartext, h.orgPlayerIDPepper)
+			playersdb.AddEntry(metaID, cmd.playerID, cmd.country, cmd.state)
+			cmd.result <- metaID
+		case cmd := <-h.saveCmdCh:
+			type saver interface{ Save(path string) error }
+			if s, ok := playersdb.(saver); ok {
+				cmd.result <- s.Save(dbPath)
+			} else {
+				cmd.result <- nil
+			}
+		case <-h.quit:
+			return
+		}
 	}
 }
 
@@ -80,25 +122,21 @@ func (h *PlayerDataHasher) PlayerUniqueHasher(last4SSN, firstName, lastName, dob
 // OrganizationPlayerIDHasher computes a hash for an organization player ID,
 // using the PlayerDB cache for deduplication.
 func (h *PlayerDataHasher) OrganizationPlayerIDHasher(playerID, country, state string) string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if metaID, found := h.playersdb.GetPlayerByOrgPlayerID(playerID, country, state); found {
-		return metaID
-	}
-	cleartext := h.orgPlayerIDPepper + ":" + playerID + ":" + country + ":" + state
-	metaID := argon2Hash(cleartext, h.orgPlayerIDPepper)
-	h.playersdb.AddEntry(metaID, playerID, country, state)
-	return metaID
+	ch := make(chan string, 1)
+	h.orgCmdCh <- orgPlayerIDCmd{playerID: playerID, country: country, state: state, result: ch}
+	return <-ch
 }
 
 // SaveDB persists the PlayerDB to disk at the configured path.
-// Uses a type assertion since Save is an implementation detail, not part of PlayerDB.
 func (h *PlayerDataHasher) SaveDB() error {
-	type saver interface{ Save(path string) error }
-	if s, ok := h.playersdb.(saver); ok {
-		return s.Save(h.dbPath)
-	}
-	return nil
+	ch := make(chan error, 1)
+	h.saveCmdCh <- saveDBCmd{result: ch}
+	return <-ch
+}
+
+// Close signals the actor goroutine to stop.
+func (h *PlayerDataHasher) Close() {
+	close(h.quit)
 }
 
 // Compile-time check that PlayerDataHasher implements Hashers.

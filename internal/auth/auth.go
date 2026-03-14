@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -25,39 +24,74 @@ type JWTClaims struct {
 	Exp      int64  `json:"exp"`
 }
 
-// TokenBlacklist tracks revoked JTIs with automatic expiry-based eviction.
-type TokenBlacklist struct {
-	mu      sync.Mutex
-	entries map[string]time.Time // JTI -> expiry time
+// blacklistRevokeCmd is a command to revoke a JTI.
+type blacklistRevokeCmd struct {
+	jti    string
+	expiry time.Time
 }
 
-// NewTokenBlacklist creates a new empty blacklist.
+// blacklistCheckCmd is a query to check if a JTI is revoked.
+type blacklistCheckCmd struct {
+	jti    string
+	result chan<- bool
+}
+
+// TokenBlacklist tracks revoked JTIs with automatic expiry-based eviction.
+// A single goroutine owns the mutable state; callers communicate via channels.
+type TokenBlacklist struct {
+	revokeCh chan blacklistRevokeCmd
+	checkCh  chan blacklistCheckCmd
+	quit     chan struct{}
+}
+
+// NewTokenBlacklist creates a new empty blacklist and starts the actor goroutine.
 func NewTokenBlacklist() *TokenBlacklist {
-	return &TokenBlacklist{
-		entries: make(map[string]time.Time),
+	b := &TokenBlacklist{
+		revokeCh: make(chan blacklistRevokeCmd),
+		checkCh:  make(chan blacklistCheckCmd),
+		quit:     make(chan struct{}),
+	}
+	go b.run()
+	return b
+}
+
+func (b *TokenBlacklist) run() {
+	entries := make(map[string]time.Time)
+	for {
+		select {
+		case cmd := <-b.revokeCh:
+			entries[cmd.jti] = cmd.expiry
+			// Evict expired entries while we're here
+			now := time.Now()
+			for k, exp := range entries {
+				if now.After(exp) {
+					delete(entries, k)
+				}
+			}
+		case cmd := <-b.checkCh:
+			_, ok := entries[cmd.jti]
+			cmd.result <- ok
+		case <-b.quit:
+			return
+		}
 	}
 }
 
 // Revoke adds a JTI to the blacklist. The entry is kept until its expiry time.
 func (b *TokenBlacklist) Revoke(jti string, expiry time.Time) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.entries[jti] = expiry
-	// Evict expired entries while we're here
-	now := time.Now()
-	for k, exp := range b.entries {
-		if now.After(exp) {
-			delete(b.entries, k)
-		}
-	}
+	b.revokeCh <- blacklistRevokeCmd{jti: jti, expiry: expiry}
 }
 
 // IsRevoked returns true if the JTI is in the blacklist.
 func (b *TokenBlacklist) IsRevoked(jti string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, ok := b.entries[jti]
-	return ok
+	ch := make(chan bool, 1)
+	b.checkCh <- blacklistCheckCmd{jti: jti, result: ch}
+	return <-ch
+}
+
+// Close signals the actor goroutine to stop.
+func (b *TokenBlacklist) Close() {
+	close(b.quit)
 }
 
 // generateJTI creates a random 16-byte hex-encoded JWT ID.
