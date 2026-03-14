@@ -30,6 +30,12 @@ func TestCreateAndParseToken(t *testing.T) {
 	if parsed.Exp != claims.Exp {
 		t.Errorf("Exp = %d, want %d", parsed.Exp, claims.Exp)
 	}
+	if parsed.JTI == "" {
+		t.Error("JTI should not be empty")
+	}
+	if parsed.JTI != claims.JTI {
+		t.Errorf("JTI = %q, want %q", parsed.JTI, claims.JTI)
+	}
 }
 
 func TestExpiredTokenRejected(t *testing.T) {
@@ -38,6 +44,7 @@ func TestExpiredTokenRejected(t *testing.T) {
 	claims := JWTClaims{
 		Username: "bob",
 		OrgID:    "org-456",
+		JTI:      "test-jti",
 		Exp:      time.Now().Add(-1 * time.Minute).Unix(),
 	}
 	tokenStr, err := CreateToken(claims, signingKey)
@@ -74,6 +81,7 @@ func TestSessionExtensionWithinWindow(t *testing.T) {
 	claims := JWTClaims{
 		Username: "alice",
 		OrgID:    "org-123",
+		JTI:      "test-jti-ext",
 		Exp:      time.Now().Add(30 * time.Second).Unix(),
 	}
 	tokenStr, err := CreateToken(claims, signingKey)
@@ -117,6 +125,7 @@ func TestSessionExtensionOutsideWindow(t *testing.T) {
 	claims := JWTClaims{
 		Username: "alice",
 		OrgID:    "org-123",
+		JTI:      "test-jti-ext2",
 		Exp:      time.Now().Add(60 * time.Second).Unix(),
 	}
 	tokenStr, err := CreateToken(claims, signingKey)
@@ -141,7 +150,7 @@ func TestSetSessionCookies(t *testing.T) {
 	w := httptest.NewRecorder()
 	expiry := time.Now().Add(5 * time.Minute)
 
-	SetSessionCookies(w, "my-jwt-token", expiry, "/")
+	SetSessionCookies(w, "my-jwt-token", expiry, "/", false)
 
 	cookies := w.Result().Cookies()
 	if len(cookies) != 2 {
@@ -167,6 +176,9 @@ func TestSetSessionCookies(t *testing.T) {
 	if session.Value != "my-jwt-token" {
 		t.Errorf("session Value = %q, want %q", session.Value, "my-jwt-token")
 	}
+	if session.Secure {
+		t.Error("session cookie should NOT have Secure flag when secure=false")
+	}
 
 	if sessionExpires == nil {
 		t.Fatal("session-expires cookie not set")
@@ -179,7 +191,7 @@ func TestSetSessionCookies(t *testing.T) {
 func TestClearSessionCookies(t *testing.T) {
 	w := httptest.NewRecorder()
 
-	ClearSessionCookies(w, "/")
+	ClearSessionCookies(w, "/", false)
 
 	cookies := w.Result().Cookies()
 	if len(cookies) != 2 {
@@ -190,5 +202,104 @@ func TestClearSessionCookies(t *testing.T) {
 		if c.MaxAge != -1 {
 			t.Errorf("cookie %q MaxAge = %d, want -1", c.Name, c.MaxAge)
 		}
+	}
+}
+
+func TestTokenBlacklistRevokeAndCheck(t *testing.T) {
+	bl := NewTokenBlacklist()
+
+	jti := "test-jti-revoke"
+	expiry := time.Now().Add(5 * time.Minute)
+
+	if bl.IsRevoked(jti) {
+		t.Fatal("JTI should not be revoked before calling Revoke")
+	}
+
+	bl.Revoke(jti, expiry)
+
+	if !bl.IsRevoked(jti) {
+		t.Fatal("JTI should be revoked after calling Revoke")
+	}
+
+	// A different JTI should not be revoked
+	if bl.IsRevoked("other-jti") {
+		t.Fatal("unrelated JTI should not be revoked")
+	}
+}
+
+func TestTokenBlacklistAutoEvictsExpired(t *testing.T) {
+	bl := NewTokenBlacklist()
+
+	// Add an already-expired entry
+	bl.entries["expired-jti"] = time.Now().Add(-1 * time.Minute)
+
+	// Revoke a new JTI — this triggers eviction
+	bl.Revoke("new-jti", time.Now().Add(5*time.Minute))
+
+	bl.mu.Lock()
+	_, hasExpired := bl.entries["expired-jti"]
+	bl.mu.Unlock()
+
+	if hasExpired {
+		t.Error("expired JTI should have been evicted")
+	}
+}
+
+func TestNewClaimsHasUniqueJTI(t *testing.T) {
+	c1 := NewClaims("user1", "org1")
+	c2 := NewClaims("user1", "org1")
+
+	if c1.JTI == "" {
+		t.Error("JTI should not be empty")
+	}
+	if c1.JTI == c2.JTI {
+		t.Error("two calls to NewClaims should produce different JTIs")
+	}
+}
+
+func TestSetSessionCookiesSecureFlag(t *testing.T) {
+	tests := []struct {
+		name   string
+		secure bool
+	}{
+		{"secure true", true},
+		{"secure false", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			expiry := time.Now().Add(5 * time.Minute)
+			SetSessionCookies(w, "token", expiry, "/", tt.secure)
+
+			for _, c := range w.Result().Cookies() {
+				if c.Secure != tt.secure {
+					t.Errorf("cookie %q Secure = %v, want %v", c.Name, c.Secure, tt.secure)
+				}
+			}
+		})
+	}
+}
+
+func TestClearSessionCookiesSecureFlag(t *testing.T) {
+	tests := []struct {
+		name   string
+		secure bool
+	}{
+		{"secure true", true},
+		{"secure false", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			ClearSessionCookies(w, "/", tt.secure)
+
+			for _, c := range w.Result().Cookies() {
+				if c.Secure != tt.secure {
+					t.Errorf("cookie %q Secure = %v, want %v", c.Name, c.Secure, tt.secure)
+				}
+			}
+		})
 	}
 }

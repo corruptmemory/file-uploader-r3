@@ -166,7 +166,7 @@ func main() {
 
 	// Create WebApp and chi router
 	listenAddr := fmt.Sprintf("%s:%d", cfg.Address, cfg.Port)
-	_, router := server.NewWebApp(application, authProvider, signingKey, appCfg.CSVUploadDir, GitVersion, cfg.Prefix, staticSub)
+	_, router := server.NewWebApp(application, authProvider, signingKey, appCfg.CSVUploadDir, GitVersion, cfg.Prefix, staticSub, false)
 
 	// Create and start Server
 	srv := server.NewServer(listenAddr, router, nil)

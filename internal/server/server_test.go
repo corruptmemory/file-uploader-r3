@@ -87,7 +87,7 @@ func newTestWebApp(t *testing.T) (*httptest.Server, func()) {
 	t.Helper()
 	application := newTestApp(t)
 	authProvider := &mock.MockAuthProvider{}
-	_, router := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t))
+	_, router := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
 	ts := httptest.NewServer(router)
 	cleanup := func() {
 		ts.Close()
@@ -95,6 +95,21 @@ func newTestWebApp(t *testing.T) (*httptest.Server, func()) {
 		application.Wait()
 	}
 	return ts, cleanup
+}
+
+// newTestWebAppWithBlacklist creates a WebApp and returns the WebApp struct for blacklist access.
+func newTestWebAppWithBlacklist(t *testing.T) (*httptest.Server, *WebApp, func()) {
+	t.Helper()
+	application := newTestApp(t)
+	authProvider := &mock.MockAuthProvider{}
+	wa, router := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
+	ts := httptest.NewServer(router)
+	cleanup := func() {
+		ts.Close()
+		application.Stop()
+		application.Wait()
+	}
+	return ts, wa, cleanup
 }
 
 // loginAndGetCookies performs a POST /login and returns the session cookies.
@@ -300,6 +315,7 @@ func TestSessionExtensionWithinWindow(t *testing.T) {
 	claims := auth.JWTClaims{
 		Username: "alice",
 		OrgID:    "mock-org-001",
+		JTI:      "test-jti-within",
 		Exp:      time.Now().Add(30 * time.Second).Unix(),
 	}
 	tokenStr, err := auth.CreateToken(claims, testSigningKey)
@@ -361,6 +377,7 @@ func TestSessionExtensionOutsideWindow(t *testing.T) {
 	claims := auth.JWTClaims{
 		Username: "alice",
 		OrgID:    "mock-org-001",
+		JTI:      "test-jti-outside",
 		Exp:      time.Now().Add(60 * time.Second).Unix(),
 	}
 	tokenStr, err := auth.CreateToken(claims, testSigningKey)
@@ -416,5 +433,99 @@ func TestWithStateOptionalSession(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestSessionReplayAfterLogout(t *testing.T) {
+	ts, wa, cleanup := newTestWebAppWithBlacklist(t)
+	defer cleanup()
+
+	// Login to get a valid session token
+	cookies := loginAndGetCookies(t, ts)
+
+	var sessionCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == "session" {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("no session cookie after login")
+	}
+
+	// Verify the token works before logout
+	req, _ := http.NewRequest("GET", ts.URL+"/", nil)
+	req.AddCookie(sessionCookie)
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET / before logout: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard before logout: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// Perform logout
+	logoutReq, _ := http.NewRequest("GET", ts.URL+"/logout", nil)
+	logoutReq.AddCookie(sessionCookie)
+	logoutResp, err := client.Do(logoutReq)
+	if err != nil {
+		t.Fatalf("GET /logout: %v", err)
+	}
+	logoutResp.Body.Close()
+
+	// Verify blacklist has the token's JTI
+	claims, _ := auth.ParseToken(sessionCookie.Value, testSigningKey)
+	if claims == nil {
+		t.Fatal("could not parse session token")
+	}
+	if !wa.tokenBlacklist.IsRevoked(claims.JTI) {
+		t.Error("token JTI should be in blacklist after logout")
+	}
+
+	// Try to replay the old token — should be rejected (redirect to login)
+	replayReq, _ := http.NewRequest("GET", ts.URL+"/", nil)
+	replayReq.AddCookie(sessionCookie)
+	replayResp, err := client.Do(replayReq)
+	if err != nil {
+		t.Fatalf("GET / replay after logout: %v", err)
+	}
+	replayResp.Body.Close()
+
+	if replayResp.StatusCode != http.StatusSeeOther {
+		t.Errorf("replayed token after logout: status = %d, want %d (redirect to login)", replayResp.StatusCode, http.StatusSeeOther)
+	}
+}
+
+func TestSecurityHeadersPresent(t *testing.T) {
+	ts, cleanup := newTestWebApp(t)
+	defer cleanup()
+
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close()
+
+	tests := []struct {
+		header string
+		want   string
+	}{
+		{"X-Frame-Options", "DENY"},
+		{"X-Content-Type-Options", "nosniff"},
+		{"Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"},
+	}
+
+	for _, tt := range tests {
+		got := resp.Header.Get(tt.header)
+		if got != tt.want {
+			t.Errorf("%s = %q, want %q", tt.header, got, tt.want)
+		}
 	}
 }

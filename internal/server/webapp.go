@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"io/fs"
+	"log"
 	"net/http"
 	"time"
 
@@ -18,29 +19,34 @@ const maxUploadSize = 50 << 20 // 50 MB
 
 // WebApp registers all HTTP routes and handles requests.
 type WebApp struct {
-	app          *app.Application
-	authProvider app.AuthProvider
-	signingKey   []byte
-	uploadDir    string
-	version      string
-	prefix       string
+	app            *app.Application
+	authProvider   app.AuthProvider
+	signingKey     []byte
+	uploadDir      string
+	version        string
+	prefix         string
+	tlsEnabled     bool
+	tokenBlacklist *auth.TokenBlacklist
 }
 
 // NewWebApp creates a WebApp and registers routes on a new chi.Router.
 // staticFS should be an fs.FS rooted at the directory containing js/, css/, img/.
-func NewWebApp(application *app.Application, authProvider app.AuthProvider, signingKey []byte, uploadDir, version, prefix string, staticFS fs.FS) (*WebApp, chi.Router) {
+func NewWebApp(application *app.Application, authProvider app.AuthProvider, signingKey []byte, uploadDir, version, prefix string, staticFS fs.FS, tlsEnabled bool) (*WebApp, chi.Router) {
 	wa := &WebApp{
-		app:          application,
-		authProvider: authProvider,
-		signingKey:   signingKey,
-		uploadDir:    uploadDir,
-		version:      version,
-		prefix:       prefix,
+		app:            application,
+		authProvider:   authProvider,
+		signingKey:     signingKey,
+		uploadDir:      uploadDir,
+		version:        version,
+		prefix:         prefix,
+		tlsEnabled:     tlsEnabled,
+		tokenBlacklist: auth.NewTokenBlacklist(),
 	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(securityHeaders)
 
 	// Mount routes under prefix
 	if prefix != "" && prefix != "/" {
@@ -52,6 +58,16 @@ func NewWebApp(application *app.Application, authProvider app.AuthProvider, sign
 	}
 
 	return wa, r
+}
+
+// securityHeaders is a chi middleware that sets security-related HTTP response headers.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (wa *WebApp) registerRoutes(r chi.Router, staticFS fs.FS) {
@@ -101,7 +117,7 @@ func (wa *WebApp) withStateAndSession(handler func(http.ResponseWriter, *http.Re
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := wa.parseClaims(r)
 		if claims == nil {
-			auth.ClearSessionCookies(w, wa.cookiePath())
+			auth.ClearSessionCookies(w, wa.cookiePath(), wa.tlsEnabled)
 			loginPath := "/login"
 			if wa.prefix != "" && wa.prefix != "/" {
 				loginPath = wa.prefix + loginPath
@@ -128,6 +144,10 @@ func (wa *WebApp) parseClaims(r *http.Request) *auth.JWTClaims {
 	}
 	claims, err := auth.ParseToken(cookie.Value, wa.signingKey)
 	if err != nil {
+		return nil
+	}
+	// Check if the token has been revoked
+	if claims.JTI != "" && wa.tokenBlacklist.IsRevoked(claims.JTI) {
 		return nil
 	}
 	return claims
@@ -161,7 +181,8 @@ func (wa *WebApp) withRunningState(handler http.HandlerFunc) http.HandlerFunc {
 			}
 			http.Redirect(w, r, setupPath, http.StatusSeeOther)
 		case app.ErrorApp:
-			http.Error(w, fmt.Sprintf("Application error: %v", s.GetError()), http.StatusInternalServerError)
+			log.Printf("Application error: %v", s.GetError())
+			http.Error(w, "Application error — please contact your administrator", http.StatusInternalServerError)
 		default:
 			http.Error(w, "unknown application state", http.StatusInternalServerError)
 		}
@@ -187,7 +208,8 @@ func (wa *WebApp) withSetupApp(handler http.HandlerFunc) http.HandlerFunc {
 			}
 			http.Redirect(w, r, rootPath, http.StatusSeeOther)
 		case app.ErrorApp:
-			http.Error(w, fmt.Sprintf("Application error: %v", s.GetError()), http.StatusInternalServerError)
+			log.Printf("Application error: %v", s.GetError())
+			http.Error(w, "Application error — please contact your administrator", http.StatusInternalServerError)
 		default:
 			http.Error(w, "unknown application state", http.StatusInternalServerError)
 		}
@@ -249,7 +271,7 @@ func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	expiry := time.Unix(claims.Exp, 0)
-	auth.SetSessionCookies(w, tokenStr, expiry, wa.cookiePath())
+	auth.SetSessionCookies(w, tokenStr, expiry, wa.cookiePath(), wa.tlsEnabled)
 
 	rootPath := "/"
 	if wa.prefix != "" && wa.prefix != "/" {
@@ -259,7 +281,16 @@ func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (wa *WebApp) handleLogout(w http.ResponseWriter, r *http.Request) {
-	auth.ClearSessionCookies(w, wa.cookiePath())
+	// Revoke the current token before clearing cookies
+	cookie, err := r.Cookie("session")
+	if err == nil {
+		claims, parseErr := auth.ParseToken(cookie.Value, wa.signingKey)
+		if parseErr == nil && claims.JTI != "" {
+			wa.tokenBlacklist.Revoke(claims.JTI, time.Unix(claims.Exp, 0))
+		}
+	}
+
+	auth.ClearSessionCookies(w, wa.cookiePath(), wa.tlsEnabled)
 	loginPath := "/login"
 	if wa.prefix != "" && wa.prefix != "/" {
 		loginPath = wa.prefix + loginPath
@@ -307,7 +338,7 @@ func (wa *WebApp) handleExtendSession(w http.ResponseWriter, r *http.Request, cl
 	}
 
 	expiry := time.Unix(newClaims.Exp, 0)
-	auth.SetSessionCookies(w, tokenStr, expiry, wa.cookiePath())
+	auth.SetSessionCookies(w, tokenStr, expiry, wa.cookiePath(), wa.tlsEnabled)
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "extended")
 }

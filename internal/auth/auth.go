@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -18,7 +21,53 @@ const ExtensionWindow = 40 * time.Second
 type JWTClaims struct {
 	Username string `json:"username"`
 	OrgID    string `json:"orgID"`
+	JTI      string `json:"jti"`
 	Exp      int64  `json:"exp"`
+}
+
+// TokenBlacklist tracks revoked JTIs with automatic expiry-based eviction.
+type TokenBlacklist struct {
+	mu      sync.Mutex
+	entries map[string]time.Time // JTI -> expiry time
+}
+
+// NewTokenBlacklist creates a new empty blacklist.
+func NewTokenBlacklist() *TokenBlacklist {
+	return &TokenBlacklist{
+		entries: make(map[string]time.Time),
+	}
+}
+
+// Revoke adds a JTI to the blacklist. The entry is kept until its expiry time.
+func (b *TokenBlacklist) Revoke(jti string, expiry time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.entries[jti] = expiry
+	// Evict expired entries while we're here
+	now := time.Now()
+	for k, exp := range b.entries {
+		if now.After(exp) {
+			delete(b.entries, k)
+		}
+	}
+}
+
+// IsRevoked returns true if the JTI is in the blacklist.
+func (b *TokenBlacklist) IsRevoked(jti string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.entries[jti]
+	return ok
+}
+
+// generateJTI creates a random 16-byte hex-encoded JWT ID.
+func generateJTI() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based ID if crypto/rand fails
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // CreateToken creates a signed HS256 JWT with the given claims and signing key.
@@ -26,6 +75,7 @@ func CreateToken(claims JWTClaims, signingKey []byte) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"username": claims.Username,
 		"orgID":    claims.OrgID,
+		"jti":      claims.JTI,
 		"exp":      claims.Exp,
 	})
 	return token.SignedString(signingKey)
@@ -50,11 +100,13 @@ func ParseToken(tokenStr string, signingKey []byte) (*JWTClaims, error) {
 
 	username, _ := mapClaims["username"].(string)
 	orgID, _ := mapClaims["orgID"].(string)
+	jti, _ := mapClaims["jti"].(string)
 	exp, _ := mapClaims["exp"].(float64)
 
 	claims := &JWTClaims{
 		Username: username,
 		OrgID:    orgID,
+		JTI:      jti,
 		Exp:      int64(exp),
 	}
 
@@ -66,17 +118,19 @@ func ParseToken(tokenStr string, signingKey []byte) (*JWTClaims, error) {
 	return claims, nil
 }
 
-// NewClaims creates a JWTClaims with a fresh expiry.
+// NewClaims creates a JWTClaims with a fresh expiry and a unique JTI.
 func NewClaims(username, orgID string) JWTClaims {
 	return JWTClaims{
 		Username: username,
 		OrgID:    orgID,
+		JTI:      generateJTI(),
 		Exp:      time.Now().Add(TokenExpiry).Unix(),
 	}
 }
 
 // SetSessionCookies sets the session and session-expires cookies on the response.
-func SetSessionCookies(w http.ResponseWriter, tokenStr string, expiry time.Time, prefix string) {
+// When secure is true, the Secure flag is set on cookies (for TLS connections).
+func SetSessionCookies(w http.ResponseWriter, tokenStr string, expiry time.Time, prefix string, secure bool) {
 	cookiePath := "/"
 	if prefix != "" {
 		cookiePath = prefix
@@ -88,6 +142,7 @@ func SetSessionCookies(w http.ResponseWriter, tokenStr string, expiry time.Time,
 		Path:     cookiePath,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   secure,
 		Expires:  expiry,
 	})
 
@@ -97,12 +152,14 @@ func SetSessionCookies(w http.ResponseWriter, tokenStr string, expiry time.Time,
 		Path:     cookiePath,
 		HttpOnly: false,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   secure,
 		Expires:  expiry,
 	})
 }
 
 // ClearSessionCookies clears the session cookies by setting them to expired.
-func ClearSessionCookies(w http.ResponseWriter, prefix string) {
+// When secure is true, the Secure flag is set on cookies (for TLS connections).
+func ClearSessionCookies(w http.ResponseWriter, prefix string, secure bool) {
 	cookiePath := "/"
 	if prefix != "" {
 		cookiePath = prefix
@@ -114,6 +171,7 @@ func ClearSessionCookies(w http.ResponseWriter, prefix string) {
 		Path:     cookiePath,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   secure,
 		MaxAge:   -1,
 	})
 
@@ -123,6 +181,7 @@ func ClearSessionCookies(w http.ResponseWriter, prefix string) {
 		Path:     cookiePath,
 		HttpOnly: false,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   secure,
 		MaxAge:   -1,
 	})
 }
