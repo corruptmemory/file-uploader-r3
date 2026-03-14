@@ -49,6 +49,14 @@ type stubRunningApp struct {
 	unsubMu         sync.Mutex
 	unsubscribed    bool
 	unsubscribedID  string
+
+	// Configurable responses for spec-14 tests
+	finishedFiles   []app.CSVFinishedFile
+	config          app.ApplicationConfig
+	mfaRequired     bool
+	runningState    *app.RunningState
+	updatedConfig   *app.ApplicationConfig
+	downloadContent string
 }
 
 func (s *stubRunningApp) Stop() {
@@ -80,6 +88,9 @@ func (s *stubRunningApp) GetFinishedDetails(id string) (*app.CSVFinishedFile, er
 	return nil, fmt.Errorf("not found")
 }
 func (s *stubRunningApp) GetState() (*app.RunningState, error) {
+	if s.runningState != nil {
+		return s.runningState, nil
+	}
 	return &app.RunningState{
 		Started: time.Now(),
 	}, nil
@@ -88,16 +99,53 @@ func (s *stubRunningApp) ProcessUploadedCSVFile(uploadedBy, originalFilename, lo
 	return nil
 }
 func (s *stubRunningApp) SearchFinished(status app.FinishedStatus, csvTypes []csv.CSVType, search string) ([]app.CSVFinishedFile, error) {
-	return nil, nil
+	if s.finishedFiles == nil {
+		return nil, nil
+	}
+	// Apply filters like the real implementation would
+	var result []app.CSVFinishedFile
+	for _, f := range s.finishedFiles {
+		if status == app.FinishedStatusSuccess && !f.Success {
+			continue
+		}
+		if status == app.FinishedStatusFailure && f.Success {
+			continue
+		}
+		if len(csvTypes) > 0 {
+			match := false
+			for _, ct := range csvTypes {
+				if f.CSVType == ct {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		if search != "" {
+			searchLower := strings.ToLower(search)
+			if !strings.Contains(strings.ToLower(f.InFile.OriginalFilename), searchLower) &&
+				!strings.Contains(strings.ToLower(f.InFile.UploadedBy), searchLower) {
+				continue
+			}
+		}
+		result = append(result, f)
+	}
+	return result, nil
 }
 func (s *stubRunningApp) GetConfig() (app.ApplicationConfig, error) {
-	return app.ApplicationConfig{}, nil
+	return s.config, nil
 }
-func (s *stubRunningApp) MFARequired() (bool, error) { return false, nil }
+func (s *stubRunningApp) MFARequired() (bool, error) { return s.mfaRequired, nil }
 func (s *stubRunningApp) UpdateConfig(config app.ApplicationConfig) error {
+	s.updatedConfig = &config
 	return nil
 }
 func (s *stubRunningApp) DownloadPlayersDB(orgPlayerHash, orgPlayerIDPepper string, response http.ResponseWriter) error {
+	if s.downloadContent != "" {
+		response.Write([]byte(s.downloadContent))
+	}
 	return nil
 }
 
@@ -1077,5 +1125,733 @@ func TestSSEDisconnectTriggersUnsubscribe(t *testing.T) {
 	}
 	if unsubID != "test-sub" {
 		t.Errorf("Unsubscribe ID = %q, want %q", unsubID, "test-sub")
+	}
+}
+
+// --- Spec 14 Tests ---
+
+// newTestWebAppWithConfiguredStub creates a WebApp and returns the stub for configuration.
+func newTestWebAppWithConfiguredStub(t *testing.T, stub *stubRunningApp) (*httptest.Server, func()) {
+	t.Helper()
+	builder := func(a *app.Application) (app.Stoppable, error) {
+		return stub, nil
+	}
+	application := app.NewApplication(builder)
+	authProvider := &mock.MockAuthProvider{}
+	_, router := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
+	ts := httptest.NewServer(router)
+	cleanup := func() {
+		ts.Close()
+		application.Stop()
+		application.Wait()
+	}
+	return ts, cleanup
+}
+
+// testFinishedFiles returns a set of test finished files.
+func testFinishedFiles() []app.CSVFinishedFile {
+	now := time.Now()
+	return []app.CSVFinishedFile{
+		{
+			InFile: app.FileMetadata{
+				ID:               "file-1",
+				OriginalFilename: "test-players.csv",
+				UploadedBy:       "alice",
+				UploadedAt:       now.Add(-2 * time.Hour),
+			},
+			CSVType:              csv.CSVPlayers,
+			ProcessingStartedAt:  now.Add(-2 * time.Hour),
+			ProcessingFinishedAt: now.Add(-1 * time.Hour),
+			Success:              true,
+		},
+		{
+			InFile: app.FileMetadata{
+				ID:               "file-2",
+				OriginalFilename: "bad-bets.csv",
+				UploadedBy:       "bob",
+				UploadedAt:       now.Add(-3 * time.Hour),
+			},
+			CSVType:              csv.CSVBets,
+			ProcessingStartedAt:  now.Add(-3 * time.Hour),
+			ProcessingFinishedAt: now.Add(-2 * time.Hour),
+			Success:              false,
+			FailurePhase:         app.FailurePhaseProcessing,
+			FailureReason:        "invalid column mapping",
+		},
+		{
+			InFile: app.FileMetadata{
+				ID:               "file-3",
+				OriginalFilename: "test-casino.csv",
+				UploadedBy:       "alice",
+				UploadedAt:       now.Add(-4 * time.Hour),
+			},
+			CSVType:              csv.CSVCasino,
+			ProcessingStartedAt:  now.Add(-4 * time.Hour),
+			ProcessingFinishedAt: now.Add(-3 * time.Hour),
+			Success:              true,
+		},
+	}
+}
+
+var noRedirectClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+func TestArchiveShowsAllFilesInitially(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh:        make(chan struct{}),
+		finishedFiles: testFinishedFiles(),
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/archived", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /archived: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Should contain all three files
+	for _, name := range []string{"test-players.csv", "bad-bets.csv", "test-casino.csv"} {
+		if !strings.Contains(bodyStr, name) {
+			t.Errorf("archive page missing file %q", name)
+		}
+	}
+}
+
+func TestArchiveFiltersByStatus(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh:        make(chan struct{}),
+		finishedFiles: testFinishedFiles(),
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("POST", ts.URL+"/search-archived",
+		strings.NewReader("status=failure"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /search-archived: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "bad-bets.csv") {
+		t.Error("failure filter should include bad-bets.csv")
+	}
+	if strings.Contains(bodyStr, "test-players.csv") {
+		t.Error("failure filter should not include test-players.csv")
+	}
+}
+
+func TestArchiveFiltersByType(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh:        make(chan struct{}),
+		finishedFiles: testFinishedFiles(),
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("POST", ts.URL+"/search-archived",
+		strings.NewReader("csv_type=players"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /search-archived: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "test-players.csv") {
+		t.Error("type filter should include test-players.csv")
+	}
+	if strings.Contains(bodyStr, "bad-bets.csv") {
+		t.Error("type filter should not include bad-bets.csv")
+	}
+}
+
+func TestArchiveTextSearch(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh:        make(chan struct{}),
+		finishedFiles: testFinishedFiles(),
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("POST", ts.URL+"/search-archived",
+		strings.NewReader("search=test"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /search-archived: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "test-players.csv") {
+		t.Error("text search should include test-players.csv")
+	}
+	if !strings.Contains(bodyStr, "test-casino.csv") {
+		t.Error("text search should include test-casino.csv")
+	}
+	if strings.Contains(bodyStr, "bad-bets.csv") {
+		t.Error("text search should not include bad-bets.csv")
+	}
+}
+
+func TestArchiveDebounce(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh:        make(chan struct{}),
+		finishedFiles: testFinishedFiles(),
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/archived", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /archived: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "delay:300ms") {
+		t.Error("archive page should contain hx-trigger with delay:300ms for debounce")
+	}
+}
+
+func TestFailureDetailsModal(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh: make(chan struct{}),
+		finishedDetails: &app.CSVFinishedFile{
+			InFile: app.FileMetadata{
+				ID:               "fail-1",
+				OriginalFilename: "broken.csv",
+				UploadedBy:       "charlie",
+			},
+			CSVType:              csv.CSVBets,
+			ProcessingStartedAt:  time.Now().Add(-1 * time.Hour),
+			ProcessingFinishedAt: time.Now(),
+			Success:              false,
+			FailurePhase:         app.FailurePhaseProcessing,
+			FailureReason:        "row 42: missing required field",
+		},
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/failure-details/fail-1", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /failure-details: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	for _, expected := range []string{"broken.csv", "processing", "row 42: missing required field"} {
+		if !strings.Contains(bodyStr, expected) {
+			t.Errorf("failure details missing %q", expected)
+		}
+	}
+}
+
+func TestSettingsDisplaysCurrentValues(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh: make(chan struct{}),
+		config: app.ApplicationConfig{
+			OrgPlayerIDPepper: "my-secret-pepper",
+			OrgPlayerIDHash:   "argon2",
+			Endpoint:          "https://api.example.com",
+			Environment:       "production",
+			UsePlayersDB:      "true",
+		},
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/settings", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /settings: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	for _, expected := range []string{"my-secret-pepper", "https://api.example.com", "production", "argon2"} {
+		if !strings.Contains(bodyStr, expected) {
+			t.Errorf("settings page missing %q", expected)
+		}
+	}
+}
+
+func TestSettingsValidationError(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh: make(chan struct{}),
+		config: app.ApplicationConfig{
+			OrgPlayerIDPepper:  "valid-pepper",
+			OrgPlayerIDHash:    "argon2",
+			Endpoint:           "https://api.example.com",
+			Environment:        "production",
+			ServiceCredentials: "some-creds",
+			UsePlayersDB:      "true",
+		},
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	// Submit with pepper too short
+	req, _ := http.NewRequest("POST", ts.URL+"/settings",
+		strings.NewReader("pepper=ab&use_players_db=true"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /settings: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "at least 5 characters") {
+		t.Error("settings should show pepper validation error")
+	}
+}
+
+func TestSettingsSaveSuccess(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh: make(chan struct{}),
+		config: app.ApplicationConfig{
+			OrgPlayerIDPepper:  "old-pepper",
+			OrgPlayerIDHash:    "argon2",
+			Endpoint:           "https://api.example.com",
+			Environment:        "production",
+			ServiceCredentials: "some-creds",
+			UsePlayersDB:      "true",
+		},
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("POST", ts.URL+"/settings",
+		strings.NewReader("pepper=new-valid-pepper&use_players_db=false"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /settings: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "Settings saved successfully") {
+		t.Error("settings should show success message")
+	}
+
+	if stub.updatedConfig == nil {
+		t.Fatal("UpdateConfig was not called")
+	}
+	if stub.updatedConfig.OrgPlayerIDPepper != "new-valid-pepper" {
+		t.Errorf("pepper = %q, want %q", stub.updatedConfig.OrgPlayerIDPepper, "new-valid-pepper")
+	}
+	if stub.updatedConfig.UsePlayersDB != "false" {
+		t.Errorf("use_players_db = %q, want %q", stub.updatedConfig.UsePlayersDB, "false")
+	}
+}
+
+func TestRegistrationCode(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh: make(chan struct{}),
+		config: app.ApplicationConfig{
+			Endpoint: "https://api.example.com",
+		},
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("POST", ts.URL+"/settings/registration",
+		strings.NewReader("registration_code=test-code-123"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /settings/registration: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "accepted") {
+		t.Errorf("registration code response should contain 'accepted', got: %s", bodyStr)
+	}
+}
+
+func TestPlayersDBEnabled(t *testing.T) {
+	now := time.Now()
+	stub := &stubRunningApp{
+		stopCh: make(chan struct{}),
+		runningState: &app.RunningState{
+			Started: now,
+			PlayersDB: app.PlayersDBState{
+				Enabled:     true,
+				PlayerCount: 1500,
+				LastUpdated: &now,
+			},
+		},
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/players-db", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /players-db: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "1500") {
+		t.Error("players DB page should show player count")
+	}
+	if !strings.Contains(bodyStr, "Download") {
+		t.Error("players DB page should have download button")
+	}
+}
+
+func TestPlayersDBDisabled(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh: make(chan struct{}),
+		runningState: &app.RunningState{
+			Started: time.Now(),
+			PlayersDB: app.PlayersDBState{
+				Enabled: false,
+			},
+		},
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/players-db", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /players-db: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "disabled") {
+		t.Error("players DB page should show disabled message")
+	}
+	if !strings.Contains(bodyStr, "/settings") {
+		t.Error("players DB page should link to settings")
+	}
+}
+
+func TestPlayersDBDownload(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh:          make(chan struct{}),
+		downloadContent: "player-data-here",
+		config: app.ApplicationConfig{
+			OrgPlayerIDHash:   "argon2",
+			OrgPlayerIDPepper: "test-pepper",
+		},
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/download-players-db", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /download-players-db: %v", err)
+	}
+	defer resp.Body.Close()
+
+	cd := resp.Header.Get("Content-Disposition")
+	if !strings.Contains(cd, "players.db") {
+		t.Errorf("Content-Disposition = %q, want to contain 'players.db'", cd)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "player-data-here" {
+		t.Errorf("download body = %q, want %q", string(body), "player-data-here")
+	}
+}
+
+func TestLoginRendersMFAConditionally(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh:      make(chan struct{}),
+		mfaRequired: true,
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	resp, err := http.Get(ts.URL + "/login")
+	if err != nil {
+		t.Fatalf("GET /login: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "mfa_token") {
+		t.Error("login page should show MFA field when MFARequired is true")
+	}
+
+	// Now test without MFA
+	stub2 := &stubRunningApp{
+		stopCh:      make(chan struct{}),
+		mfaRequired: false,
+	}
+	ts2, cleanup2 := newTestWebAppWithConfiguredStub(t, stub2)
+	defer cleanup2()
+
+	resp2, err := http.Get(ts2.URL + "/login")
+	if err != nil {
+		t.Fatalf("GET /login: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	body2, _ := io.ReadAll(resp2.Body)
+	bodyStr2 := string(body2)
+
+	if strings.Contains(bodyStr2, "mfa_token") {
+		t.Error("login page should NOT show MFA field when MFARequired is false")
+	}
+}
+
+func TestLoginSuccess(t *testing.T) {
+	stub := &stubRunningApp{
+		stopCh: make(chan struct{}),
+	}
+	ts, cleanup := newTestWebAppWithConfiguredStub(t, stub)
+	defer cleanup()
+
+	formData := "username=testuser&password=testpass"
+	req, _ := http.NewRequest("POST", ts.URL+"/login", strings.NewReader(formData))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /login: %v", err)
+	}
+	resp.Body.Close()
+
+	// htmx login should return HX-Redirect header
+	hxRedirect := resp.Header.Get("HX-Redirect")
+	if hxRedirect != "/" {
+		t.Errorf("HX-Redirect = %q, want %q", hxRedirect, "/")
+	}
+
+	// Should also set session cookies
+	var hasSession bool
+	for _, c := range resp.Cookies() {
+		if c.Name == "session" {
+			hasSession = true
+		}
+	}
+	if !hasSession {
+		t.Error("login success should set session cookie")
+	}
+}
+
+func TestLoginFailure(t *testing.T) {
+	// Create a custom auth provider that rejects logins
+	stub := &stubRunningApp{
+		stopCh: make(chan struct{}),
+	}
+	builder := func(a *app.Application) (app.Stoppable, error) {
+		return stub, nil
+	}
+	application := app.NewApplication(builder)
+	defer func() {
+		application.Stop()
+		application.Wait()
+	}()
+
+	failAuthProvider := &failingAuthProvider{}
+	_, router := NewWebApp(application, failAuthProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	formData := "username=testuser&password=wrongpass"
+	req, _ := http.NewRequest("POST", ts.URL+"/login", strings.NewReader(formData))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /login: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Error message should be present
+	if !strings.Contains(bodyStr, "Invalid credentials") {
+		t.Error("login failure should show error message")
+	}
+	// Username should be preserved
+	if !strings.Contains(bodyStr, "testuser") {
+		t.Error("login failure should preserve username")
+	}
+	// Password should NOT be in the response
+	if strings.Contains(bodyStr, "wrongpass") {
+		t.Error("login failure should not echo password")
+	}
+}
+
+// failingAuthProvider always rejects login attempts.
+type failingAuthProvider struct{}
+
+func (f *failingAuthProvider) Login(username, password, mfaToken string) (app.SessionToken, error) {
+	return app.SessionToken{}, fmt.Errorf("invalid credentials")
+}
+func (f *failingAuthProvider) ServiceAccountLogin(serviceCode string) (app.SessionToken, error) {
+	return app.SessionToken{}, fmt.Errorf("not implemented")
+}
+func (f *failingAuthProvider) ConsumeRegistrationCode(endpoint, code string) (app.APIClient, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (f *failingAuthProvider) MFARequired() bool { return false }
+
+func TestLogoutClearsCookies(t *testing.T) {
+	ts, cleanup := newTestWebApp(t)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("POST", ts.URL+"/logout", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /logout: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
+	}
+
+	location := resp.Header.Get("Location")
+	if location != "/login" {
+		t.Errorf("Location = %q, want %q", location, "/login")
+	}
+
+	// Check that session cookies are cleared (MaxAge < 0)
+	for _, c := range resp.Cookies() {
+		if c.Name == "session" || c.Name == "session-expires" {
+			if c.MaxAge >= 0 && c.Value != "" {
+				t.Errorf("cookie %q should be cleared (MaxAge=%d, Value=%q)", c.Name, c.MaxAge, c.Value)
+			}
+		}
 	}
 }

@@ -1,9 +1,207 @@
 package pages
 
-templ SettingsPage(prefix string) {
+import (
+	"fmt"
+	"github.com/corruptmemory/file-uploader-r3/internal/app"
+	"github.com/corruptmemory/file-uploader-r3/internal/csv"
+)
+
+// --- Archive Page ---
+
+templ ArchivedPage(prefix string, files []app.CSVFinishedFile) {
+	@Layout(prefix, "archived") {
+		<div class="section">
+			<h2 class="section-title">Archived Files</h2>
+			<form hx-post={ prefix + "/search-archived" }
+				hx-trigger="change, keyup changed delay:300ms"
+				hx-target="#archive-results"
+				hx-swap="innerHTML">
+				<div class="filter-controls">
+					<div class="form-group">
+						<label for="status">Status</label>
+						<select id="status" name="status">
+							<option value="">All</option>
+							<option value="success">Success</option>
+							<option value="failure">Failure</option>
+						</select>
+					</div>
+					<div class="form-group">
+						<label for="csv_type">Type</label>
+						<select id="csv_type" name="csv_type">
+							<option value="">All</option>
+							for _, ct := range csv.AllCSVTypes() {
+								<option value={ ct.Slug() }>{ ct.String() }</option>
+							}
+						</select>
+					</div>
+					<div class="form-group">
+						<label for="search">Search</label>
+						<input type="text" id="search" name="search" placeholder="Search filenames or uploaders..."/>
+					</div>
+				</div>
+			</form>
+			<div id="archive-results">
+				@ArchiveResultsTable(prefix, files)
+			</div>
+		</div>
+	}
+}
+
+func archivedFinishedTimestamp(f app.CSVFinishedFile) string {
+	if f.UploadingFinishedAt != nil {
+		return f.UploadingFinishedAt.Format("2006-01-02 15:04:05")
+	}
+	return f.ProcessingFinishedAt.Format("2006-01-02 15:04:05")
+}
+
+templ ArchiveResultsTable(prefix string, files []app.CSVFinishedFile) {
+	if len(files) == 0 {
+		<p class="empty-state">No archived files found.</p>
+	} else {
+		<div class="table-wrapper">
+			<table class="data-table">
+				<thead>
+					<tr>
+						<th>File</th>
+						<th>CSV Type</th>
+						<th>Status</th>
+						<th>Uploaded By</th>
+						<th>Processed At</th>
+						<th>Uploaded At</th>
+						<th>Failure Phase</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, f := range files {
+						if f.Success {
+							<tr class="row-success">
+								<td>{ f.InFile.OriginalFilename }</td>
+								<td>{ f.CSVType.String() }</td>
+								<td><span class="badge badge-success">Success</span></td>
+								<td>{ f.InFile.UploadedBy }</td>
+								<td>{ archivedFinishedTimestamp(f) }</td>
+								<td>{ f.InFile.UploadedAt.Format("2006-01-02 15:04:05") }</td>
+								<td></td>
+							</tr>
+						} else {
+							<tr class="row-failure"
+								hx-get={ prefix + "/failure-details/" + f.InFile.ID }
+								hx-target="#failure-modal .failure-details"
+								hx-swap="innerHTML"
+								onclick="document.getElementById('failure-modal').classList.add('active')">
+								<td>{ f.InFile.OriginalFilename }</td>
+								<td>{ f.CSVType.String() }</td>
+								<td><span class="badge badge-failure">Failed</span></td>
+								<td>{ f.InFile.UploadedBy }</td>
+								<td>{ archivedFinishedTimestamp(f) }</td>
+								<td>{ f.InFile.UploadedAt.Format("2006-01-02 15:04:05") }</td>
+								<td>{ string(f.FailurePhase) }</td>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// --- Settings Page ---
+
+type SettingsData struct {
+	Config       app.ApplicationConfig
+	Errors       *app.ApplicationConfigErrors
+	SuccessMsg   string
+	RegCodeMsg   string
+	RegCodeError string
+}
+
+templ SettingsPage(prefix string, data SettingsData) {
 	@Layout(prefix, "settings") {
-		<h1>Settings</h1>
-		<p>Settings page placeholder.</p>
+		<div class="section">
+			<h2 class="section-title">Settings</h2>
+			if data.SuccessMsg != "" {
+				<div class="alert alert-success">{ data.SuccessMsg }</div>
+			}
+			<!-- API Endpoint (read-only) -->
+			<div class="settings-section">
+				<h3>API Endpoint</h3>
+				<div class="form-group">
+					<label>Environment</label>
+					<input type="text" value={ data.Config.Environment } disabled/>
+				</div>
+				<div class="form-group">
+					<label>Endpoint URL</label>
+					<input type="text" value={ data.Config.Endpoint } disabled/>
+				</div>
+			</div>
+			<!-- Service Credentials (separate form) -->
+			<div class="settings-section">
+				<h3>Service Credentials</h3>
+				if data.RegCodeMsg != "" {
+					<div class="alert alert-success">{ data.RegCodeMsg }</div>
+				}
+				if data.RegCodeError != "" {
+					<div class="alert alert-danger">{ data.RegCodeError }</div>
+				}
+				<form hx-post={ prefix + "/settings/registration" }
+					hx-target="#reg-code-result"
+					hx-swap="innerHTML">
+					<div class="form-group">
+						<label for="registration_code">Registration Code</label>
+						<input type="text" id="registration_code" name="registration_code" required/>
+						<small>Submit a new registration code to update service credentials.</small>
+					</div>
+					<button type="submit" class="btn btn-primary btn-sm">Submit Code</button>
+				</form>
+				<div id="reg-code-result"></div>
+			</div>
+			<!-- Player ID Hasher + Use Players DB (main settings form) -->
+			<form method="POST" action={ templ.SafeURL(prefix + "/settings") }>
+				<div class="settings-section">
+					<h3>Player ID Hasher</h3>
+					<div class="form-group">
+						<label for="pepper">Pepper</label>
+						<input type="text" id="pepper" name="pepper" value={ data.Config.OrgPlayerIDPepper } required minlength="5"/>
+						if data.Errors != nil && len(data.Errors.GetPlayerIDPepperError()) > 0 {
+							for _, e := range data.Errors.GetPlayerIDPepperError() {
+								<small class="text-danger">{ e.Err.Error() }</small>
+							}
+						}
+						<small>Minimum 5 characters. Used for hashing player IDs.</small>
+					</div>
+					<div class="form-group">
+						<label>Hash Algorithm</label>
+						<input type="text" value="argon2" disabled/>
+						<small>Not editable. Always argon2.</small>
+					</div>
+				</div>
+				<div class="settings-section">
+					<h3>Use Players DB</h3>
+					<div class="form-group">
+						<label>
+							<input type="radio" name="use_players_db" value="true"
+								if data.Config.UsePlayersDBValue() {
+									checked
+								}
+							/> Yes
+						</label>
+						<label class="ml-md">
+							<input type="radio" name="use_players_db" value="false"
+								if !data.Config.UsePlayersDBValue() {
+									checked
+								}
+							/> No
+						</label>
+						if data.Errors != nil && len(data.Errors.GetUsePlayersDBError()) > 0 {
+							for _, e := range data.Errors.GetUsePlayersDBError() {
+								<small class="text-danger">{ e.Err.Error() }</small>
+							}
+						}
+					</div>
+				</div>
+				<button type="submit" class="btn btn-primary">Save Settings</button>
+			</form>
+		</div>
 	}
 }
 
@@ -14,23 +212,37 @@ templ SettingsUpdatedPage(prefix string) {
 	}
 }
 
-templ PlayersDBPage(prefix string) {
+// --- Players DB Page ---
+
+templ PlayersDBPage(prefix string, dbState app.PlayersDBState) {
 	@Layout(prefix, "players-db") {
-		<h1>Players Database</h1>
-		<p>Players DB page placeholder.</p>
+		<div class="section">
+			<h2 class="section-title">Players Database</h2>
+			<div class="card">
+				if dbState.Enabled {
+					<p><strong>Status:</strong> Enabled</p>
+					<p><strong>Player Count:</strong> { fmt.Sprintf("%d", dbState.PlayerCount) }</p>
+					if dbState.LastUpdated != nil {
+						<p><strong>Last Updated:</strong> { dbState.LastUpdated.Format("2006-01-02 15:04:05") }</p>
+					} else {
+						<p><strong>Last Updated:</strong> Never</p>
+					}
+					<a href={ templ.SafeURL(prefix + "/download-players-db") } class="btn btn-primary mt-md">Download Players DB</a>
+				} else {
+					<p>The Players Database feature is currently disabled.</p>
+					<p class="mt-md"><a href={ templ.SafeURL(prefix + "/settings") }>Go to Settings</a> to enable it.</p>
+				}
+			</div>
+		</div>
 	}
 }
 
-templ ArchivedPage(prefix string) {
-	@Layout(prefix, "archived") {
-		<h1>Archived Files</h1>
-		<p>Archived files page placeholder.</p>
-	}
-}
+// --- Registration Code Result Fragment ---
 
-templ SearchArchivedPage(prefix string) {
-	@Layout(prefix, "archived") {
-		<h1>Search Results</h1>
-		<p>Search results placeholder.</p>
+templ RegCodeResult(success bool, message string) {
+	if success {
+		<div class="alert alert-success">{ message }</div>
+	} else {
+		<div class="alert alert-danger">{ message }</div>
 	}
 }

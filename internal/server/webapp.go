@@ -20,6 +20,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/corruptmemory/file-uploader-r3/internal/app"
 	"github.com/corruptmemory/file-uploader-r3/internal/auth"
+	"github.com/corruptmemory/file-uploader-r3/internal/csv"
 	"github.com/corruptmemory/file-uploader-r3/internal/server/pages"
 	"github.com/corruptmemory/file-uploader-r3/internal/setup"
 	"github.com/go-chi/chi/v5"
@@ -198,6 +199,7 @@ func (wa *WebApp) registerRoutes(r chi.Router, staticFS fs.FS) {
 		sub.Get("/failure-details/{record-id}", wa.withRunningState(wa.withStateAndSession(wa.handleFailureDetails)))
 		sub.Get("/settings", wa.withRunningState(wa.withStateAndSession(wa.handleSettingsGet)))
 		sub.Post("/settings", wa.withRunningState(wa.withStateAndSession(wa.handleSettingsPost)))
+		sub.Post("/settings/registration", wa.withRunningState(wa.withStateAndSession(wa.handleRegistrationCode)))
 		sub.Get("/players-db", wa.withRunningState(wa.withStateAndSession(wa.handlePlayersDB)))
 		sub.Get("/download-players-db", wa.withRunningState(wa.withStateAndSession(wa.handleDownloadPlayersDB)))
 		sub.Get("/archived", wa.withRunningState(wa.withStateAndSession(wa.handleArchived)))
@@ -366,8 +368,15 @@ func (wa *WebApp) handleLoginGet(w http.ResponseWriter, r *http.Request, claims 
 		http.Redirect(w, r, rootPath, http.StatusSeeOther)
 		return
 	}
+
+	ra, err := wa.getRunningApp()
+	needsMFA := false
+	if err == nil {
+		needsMFA, _ = ra.MFARequired()
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	component := pages.LoginPage(wa.prefix, "")
+	component := pages.LoginPageFull(wa.prefix, pages.LoginFormData{NeedsMFA: needsMFA})
 	if err := component.Render(r.Context(), w); err != nil {
 		log.Printf("login page render error: %v", err)
 	}
@@ -378,17 +387,35 @@ func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	mfaToken := r.FormValue("mfa_token")
 
+	ra, raErr := wa.getRunningApp()
+	needsMFA := false
+	if raErr == nil {
+		needsMFA, _ = ra.MFARequired()
+	}
+
 	if username == "" || password == "" {
+		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, "username and password required")
+		component := pages.LoginForm(wa.prefix, pages.LoginFormData{
+			Username: html.EscapeString(username),
+			NeedsMFA: needsMFA,
+			Error:    "Username and password are required",
+		})
+		component.Render(r.Context(), w)
 		return
 	}
 
 	// Authenticate via the AuthProvider
 	sessionToken, err := wa.authProvider.Login(username, password, mfaToken)
 	if err != nil {
+		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, "invalid credentials")
+		component := pages.LoginForm(wa.prefix, pages.LoginFormData{
+			Username: html.EscapeString(username),
+			NeedsMFA: needsMFA,
+			Error:    "Invalid credentials",
+		})
+		component.Render(r.Context(), w)
 		return
 	}
 
@@ -407,6 +434,14 @@ func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	if wa.prefix != "" && wa.prefix != "/" {
 		rootPath = wa.prefix + "/"
 	}
+
+	// If htmx request, use HX-Redirect header
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", rootPath)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	http.Redirect(w, r, rootPath, http.StatusSeeOther)
 }
 
@@ -627,46 +662,212 @@ func (wa *WebApp) handleFailureDetails(w http.ResponseWriter, r *http.Request, c
 }
 
 func (wa *WebApp) handleSettingsGet(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	config, err := ra.GetConfig()
+	if err != nil {
+		http.Error(w, "failed to get config", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	component := pages.SettingsPage(wa.prefix)
+	component := pages.SettingsPage(wa.prefix, pages.SettingsData{Config: config})
 	if err := component.Render(r.Context(), w); err != nil {
 		log.Printf("settings render error: %v", err)
 	}
 }
 
 func (wa *WebApp) handleSettingsPost(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	config, err := ra.GetConfig()
+	if err != nil {
+		http.Error(w, "failed to get config", http.StatusInternalServerError)
+		return
+	}
+
+	// Apply settable values from form
+	pepper := r.FormValue("pepper")
+	usePlayersDB := r.FormValue("use_players_db")
+
+	updated := config.
+		WithOrgPlayerIDPepper(pepper).
+		WithOrgPlayerIDHash("argon2").
+		WithUsePlayersDB(usePlayersDB)
+
+	// Validate
+	validErr := updated.ValidateSettableValues(nil)
+	if validErr != nil {
+		configErrors, ok := validErr.(*app.ApplicationConfigErrors)
+		if !ok {
+			http.Error(w, "validation error", http.StatusInternalServerError)
+			return
+		}
+		// Filter to only settable field errors (pepper, use_players_db)
+		w.Header().Set("Content-Type", "text/html")
+		component := pages.SettingsPage(wa.prefix, pages.SettingsData{
+			Config: updated,
+			Errors: configErrors,
+		})
+		if err := component.Render(r.Context(), w); err != nil {
+			log.Printf("settings render error: %v", err)
+		}
+		return
+	}
+
+	// Save config
+	if err := ra.UpdateConfig(updated); err != nil {
+		http.Error(w, "failed to save settings", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	component := pages.SettingsUpdatedPage(wa.prefix)
+	component := pages.SettingsPage(wa.prefix, pages.SettingsData{
+		Config:     updated,
+		SuccessMsg: "Settings saved successfully.",
+	})
 	if err := component.Render(r.Context(), w); err != nil {
 		log.Printf("settings render error: %v", err)
 	}
 }
 
-func (wa *WebApp) handlePlayersDB(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+func (wa *WebApp) handleRegistrationCode(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	config, err := ra.GetConfig()
+	if err != nil {
+		http.Error(w, "failed to get config", http.StatusInternalServerError)
+		return
+	}
+
+	code := r.FormValue("registration_code")
+	if code == "" {
+		w.Header().Set("Content-Type", "text/html")
+		component := pages.RegCodeResult(false, "Registration code is required")
+		component.Render(r.Context(), w)
+		return
+	}
+
+	_, consumeErr := wa.authProvider.ConsumeRegistrationCode(config.Endpoint, code)
+	if consumeErr != nil {
+		w.Header().Set("Content-Type", "text/html")
+		component := pages.RegCodeResult(false, "Failed to consume registration code: "+html.EscapeString(consumeErr.Error()))
+		component.Render(r.Context(), w)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	component := pages.PlayersDBPage(wa.prefix)
+	component := pages.RegCodeResult(true, "Registration code accepted successfully.")
+	component.Render(r.Context(), w)
+}
+
+func (wa *WebApp) handlePlayersDB(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	runState, err := ra.GetState()
+	if err != nil {
+		http.Error(w, "failed to get state", http.StatusInternalServerError)
+		return
+	}
+
+	dbState := app.PlayersDBState{}
+	if runState != nil {
+		dbState = runState.PlayersDB
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	component := pages.PlayersDBPage(wa.prefix, dbState)
 	if err := component.Render(r.Context(), w); err != nil {
 		log.Printf("players-db render error: %v", err)
 	}
 }
 
 func (wa *WebApp) handleDownloadPlayersDB(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
-	// Placeholder — download implementation comes in later specs
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, "download placeholder")
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	config, err := ra.GetConfig()
+	if err != nil {
+		http.Error(w, "failed to get config", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", `attachment; filename="players.db"`)
+	w.Header().Set("Content-Type", "application/octet-stream")
+
+	if err := ra.DownloadPlayersDB(config.OrgPlayerIDHash, config.OrgPlayerIDPepper, w); err != nil {
+		log.Printf("download players DB error: %v", err)
+	}
 }
 
 func (wa *WebApp) handleArchived(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	files, err := ra.SearchFinished(app.FinishedStatusAll, nil, "")
+	if err != nil {
+		http.Error(w, "failed to get archived files", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	component := pages.ArchivedPage(wa.prefix)
+	component := pages.ArchivedPage(wa.prefix, files)
 	if err := component.Render(r.Context(), w); err != nil {
 		log.Printf("archived render error: %v", err)
 	}
 }
 
 func (wa *WebApp) handleSearchArchived(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	statusStr := r.FormValue("status")
+	status := app.FinishedStatus(statusStr)
+
+	var csvTypes []csv.CSVType
+	csvTypeStr := r.FormValue("csv_type")
+	if csvTypeStr != "" {
+		ct, err := csv.CSVTypeFromSlug(csvTypeStr)
+		if err == nil {
+			csvTypes = []csv.CSVType{ct}
+		}
+	}
+
+	search := r.FormValue("search")
+
+	files, err := ra.SearchFinished(status, csvTypes, search)
+	if err != nil {
+		http.Error(w, "failed to search archived files", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	component := pages.SearchArchivedPage(wa.prefix)
+	component := pages.ArchiveResultsTable(wa.prefix, files)
 	if err := component.Render(r.Context(), w); err != nil {
 		log.Printf("search archived render error: %v", err)
 	}

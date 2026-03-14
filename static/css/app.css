@@ -490,6 +490,16 @@ a:hover {
     color: var(--color-danger-text);
 }
 
+.text-danger {
+    color: var(--color-danger-text);
+}
+
+.navbar-logout-form {
+    display: inline;
+    margin: 0;
+    padding: 0;
+}
+
 /* === Empty States === */
 .empty-state {
     text-align: center;
