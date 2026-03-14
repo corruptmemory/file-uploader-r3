@@ -7,10 +7,13 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/corruptmemory/file-uploader-r3/internal/app"
 	"github.com/corruptmemory/file-uploader-r3/internal/auth"
+	"github.com/corruptmemory/file-uploader-r3/internal/server/pages"
+	"github.com/corruptmemory/file-uploader-r3/internal/setup"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -389,13 +392,122 @@ func (wa *WebApp) handleSearchArchived(w http.ResponseWriter, r *http.Request, c
 	fmt.Fprint(w, "<html><body><h1>Search Results</h1></body></html>")
 }
 
+func (wa *WebApp) getSetupApp() (app.SetupApp, error) {
+	state, err := wa.app.GetState()
+	if err != nil {
+		return nil, err
+	}
+	sa, ok := state.(app.SetupApp)
+	if !ok {
+		return nil, fmt.Errorf("not in setup state")
+	}
+	return sa, nil
+}
+
 func (wa *WebApp) handleSetupGet(w http.ResponseWriter, r *http.Request) {
+	sa, err := wa.getSetupApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	info, err := sa.GetCurrentState()
+	if err != nil {
+		http.Error(w, "failed to get setup state", http.StatusInternalServerError)
+		return
+	}
+
+	stepInfo, ok := info.(*setup.StepInfo)
+	if !ok {
+		http.Error(w, "invalid step info", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, "<html><body><h1>Setup Wizard</h1></body></html>")
+	component := pages.SetupPage(stepInfo, wa.prefix)
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("setup page render error: %v", err)
+	}
 }
 
 func (wa *WebApp) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 	action := chi.URLParam(r, "action")
+
+	sa, err := wa.getSetupApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form data", http.StatusBadRequest)
+		return
+	}
+
+	var info app.SetupStepInfo
+
+	switch action {
+	case "next":
+		stepStr := r.FormValue("current_step")
+		step, parseErr := strconv.Atoi(stepStr)
+		if parseErr != nil {
+			http.Error(w, "invalid step", http.StatusBadRequest)
+			return
+		}
+
+		switch app.SetupStepNumber(step) {
+		case app.StepWelcome:
+			info, err = sa.GetServiceEndpoint()
+		case app.StepEndpoint:
+			endpoint := r.FormValue("endpoint")
+			env := r.FormValue("environment")
+			info, err = sa.SetServiceEndpoint(endpoint, env)
+		case app.StepServiceCredentials:
+			code := r.FormValue("registration_code")
+			info, err = sa.UseRegistrationCode(code)
+		case app.StepPlayerIDHasher:
+			pepper := r.FormValue("pepper")
+			hashAlg := r.FormValue("hash_algorithm")
+			if hashAlg == "" {
+				hashAlg = "argon2"
+			}
+			info, err = sa.SetPlayerIDHasher(pepper, hashAlg)
+		case app.StepUsePlayersDB:
+			useDB := r.FormValue("use_players_db") == "true"
+			info, err = sa.SetUsePlayerDB(useDB)
+		default:
+			http.Error(w, "invalid step", http.StatusBadRequest)
+			return
+		}
+
+	case "back":
+		stepStr := r.FormValue("current_step")
+		step, parseErr := strconv.Atoi(stepStr)
+		if parseErr != nil {
+			http.Error(w, "invalid step", http.StatusBadRequest)
+			return
+		}
+		info, err = sa.GoBackFrom(app.SetupStepNumber(step))
+
+	default:
+		http.Error(w, "unknown action", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(w, "setup error", http.StatusInternalServerError)
+		return
+	}
+
+	stepInfo, ok := info.(*setup.StepInfo)
+	if !ok {
+		http.Error(w, "invalid step info", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, "<html><body><h1>Setup: %s</h1></body></html>", html.EscapeString(action))
+	component := pages.SetupStepContent(stepInfo, wa.prefix)
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("setup step render error: %v", err)
+	}
 }

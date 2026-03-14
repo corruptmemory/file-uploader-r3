@@ -1,0 +1,25 @@
+package pages
+
+import "github.com/corruptmemory/file-uploader-r3/internal/setup"
+
+templ SetupPage(info *setup.StepInfo, prefix string) {
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<title>Setup Wizard - File Uploader</title>
+		<link rel="stylesheet" href={ prefix + "/css/tokens.css" }/>
+		<link rel="stylesheet" href={ prefix + "/css/app.css" }/>
+		<script src={ prefix + "/vendor/htmx.min.js" }></script>
+	</head>
+	<body>
+		<div class="setup-wizard">
+			<h1>Setup Wizard</h1>
+			<div id="wizard-content">
+				@SetupStepContent(info, prefix)
+			</div>
+		</div>
+	</body>
+	</html>
+}

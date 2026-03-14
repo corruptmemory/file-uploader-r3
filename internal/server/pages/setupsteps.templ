@@ -1,0 +1,161 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/corruptmemory/file-uploader-r3/internal/app"
+	"github.com/corruptmemory/file-uploader-r3/internal/setup"
+)
+
+templ SetupStepContent(info *setup.StepInfo, prefix string) {
+	switch info.Step {
+		case app.StepWelcome:
+			@stepWelcome(info, prefix)
+		case app.StepEndpoint:
+			@stepEndpoint(info, prefix)
+		case app.StepServiceCredentials:
+			@stepServiceCredentials(info, prefix)
+		case app.StepPlayerIDHasher:
+			@stepPlayerIDHasher(info, prefix)
+		case app.StepUsePlayersDB:
+			@stepUsePlayersDB(info, prefix)
+		case app.StepDone:
+			@stepDone(prefix)
+		case app.StepError:
+			@stepError(info, prefix)
+	}
+}
+
+templ stepWelcome(info *setup.StepInfo, prefix string) {
+	<div class="setup-step">
+		<h2>Welcome</h2>
+		if info.Reason != "" {
+			<div class="setup-reason"><p>{ info.Reason }</p></div>
+		}
+		<p>This wizard will guide you through the initial configuration of the File Uploader.</p>
+		<form hx-post={ prefix + "/setup/next" } hx-target="#wizard-content" hx-swap="innerHTML">
+			<input type="hidden" name="current_step" value="0"/>
+			<div class="setup-actions">
+				<button type="submit" class="btn btn-primary">Get Started</button>
+			</div>
+		</form>
+	</div>
+}
+
+templ stepEndpoint(info *setup.StepInfo, prefix string) {
+	<div class="setup-step">
+		<h2>Service Endpoint</h2>
+		if info.ErrorMsg != "" {
+			<div class="setup-error"><p>{ info.ErrorMsg }</p></div>
+		}
+		<form hx-post={ prefix + "/setup/next" } hx-target="#wizard-content" hx-swap="innerHTML">
+			<input type="hidden" name="current_step" value="1"/>
+			<div class="form-group">
+				<label for="environment">Environment Name</label>
+				<input type="text" id="environment" name="environment" value={ info.Environment } required minlength="3" maxlength="15"/>
+				<small>3-15 characters (e.g., "production", "staging")</small>
+			</div>
+			<div class="form-group">
+				<label for="endpoint">Endpoint URL</label>
+				<input type="text" id="endpoint" name="endpoint" value={ info.Endpoint } required placeholder="https://api.example.com"/>
+			</div>
+			<div class="setup-actions">
+				<button type="button" class="btn btn-secondary" hx-post={ prefix + "/setup/back" } hx-target="#wizard-content" hx-swap="innerHTML" hx-vals={ fmt.Sprintf(`{"current_step": "%d"}`, int(app.StepEndpoint)) }>Back</button>
+				<button type="submit" class="btn btn-primary">Next</button>
+			</div>
+		</form>
+	</div>
+}
+
+templ stepServiceCredentials(info *setup.StepInfo, prefix string) {
+	<div class="setup-step">
+		<h2>Service Credentials</h2>
+		if info.ErrorMsg != "" {
+			<div class="setup-error"><p>{ info.ErrorMsg }</p></div>
+		}
+		<p class="mb-md">Enter the one-time registration code provided by your administrator.</p>
+		<form hx-post={ prefix + "/setup/next" } hx-target="#wizard-content" hx-swap="innerHTML">
+			<input type="hidden" name="current_step" value="2"/>
+			<div class="form-group">
+				<label for="registration_code">Registration Code</label>
+				<input type="text" id="registration_code" name="registration_code" required/>
+			</div>
+			<div class="setup-actions">
+				<button type="button" class="btn btn-secondary" hx-post={ prefix + "/setup/back" } hx-target="#wizard-content" hx-swap="innerHTML" hx-vals={ fmt.Sprintf(`{"current_step": "%d"}`, int(app.StepServiceCredentials)) }>Back</button>
+				<button type="submit" class="btn btn-primary">Next</button>
+			</div>
+		</form>
+	</div>
+}
+
+templ stepPlayerIDHasher(info *setup.StepInfo, prefix string) {
+	<div class="setup-step">
+		<h2>Player ID Hasher</h2>
+		if info.ErrorMsg != "" {
+			<div class="setup-error"><p>{ info.ErrorMsg }</p></div>
+		}
+		<form hx-post={ prefix + "/setup/next" } hx-target="#wizard-content" hx-swap="innerHTML">
+			<input type="hidden" name="current_step" value="3"/>
+			<div class="form-group">
+				<label for="pepper">Pepper</label>
+				<input type="text" id="pepper" name="pepper" value={ info.Pepper } required minlength="5"/>
+				<small>Minimum 5 characters. Used for hashing player IDs.</small>
+			</div>
+			<div class="form-group">
+				<label for="hash_algorithm">Hash Algorithm</label>
+				<input type="text" id="hash_algorithm" name="hash_algorithm" value="argon2" readonly/>
+			</div>
+			<div class="setup-actions">
+				<button type="button" class="btn btn-secondary" hx-post={ prefix + "/setup/back" } hx-target="#wizard-content" hx-swap="innerHTML" hx-vals={ fmt.Sprintf(`{"current_step": "%d"}`, int(app.StepPlayerIDHasher)) }>Back</button>
+				<button type="submit" class="btn btn-primary">Next</button>
+			</div>
+		</form>
+	</div>
+}
+
+templ stepUsePlayersDB(info *setup.StepInfo, prefix string) {
+	<div class="setup-step">
+		<h2>Use Players Database</h2>
+		<p class="mb-md">Enable the local players database for deduplication?</p>
+		<form hx-post={ prefix + "/setup/next" } hx-target="#wizard-content" hx-swap="innerHTML">
+			<input type="hidden" name="current_step" value="4"/>
+			<div class="form-group">
+				<label>
+					<input type="radio" name="use_players_db" value="true" checked?={ info.UsePlayersDB }/>
+					Yes
+				</label>
+			</div>
+			<div class="form-group">
+				<label>
+					<input type="radio" name="use_players_db" value="false" checked?={ !info.UsePlayersDB }/>
+					No
+				</label>
+			</div>
+			<div class="setup-actions">
+				<button type="button" class="btn btn-secondary" hx-post={ prefix + "/setup/back" } hx-target="#wizard-content" hx-swap="innerHTML" hx-vals={ fmt.Sprintf(`{"current_step": "%d"}`, int(app.StepUsePlayersDB)) }>Back</button>
+				<button type="submit" class="btn btn-primary">Finish</button>
+			</div>
+		</form>
+	</div>
+}
+
+templ stepDone(prefix string) {
+	<div class="setup-step">
+		<h2>Setup Complete</h2>
+		<p class="mb-md">Configuration has been saved. The application is now running.</p>
+		<div class="setup-actions">
+			<a href={ templ.SafeURL(prefix + "/login") } class="btn btn-primary">Go to Login</a>
+		</div>
+	</div>
+}
+
+templ stepError(info *setup.StepInfo, prefix string) {
+	<div class="setup-step">
+		<h2>Error</h2>
+		if info.ErrorMsg != "" {
+			<div class="setup-error"><p>{ info.ErrorMsg }</p></div>
+		}
+		<div class="setup-actions">
+			<button type="button" class="btn btn-secondary" hx-post={ prefix + "/setup/back" } hx-target="#wizard-content" hx-swap="innerHTML" hx-vals={ fmt.Sprintf(`{"current_step": "%d"}`, int(app.StepError)) }>Start Over</button>
+		</div>
+	</div>
+}

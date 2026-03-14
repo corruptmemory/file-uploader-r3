@@ -16,6 +16,7 @@ import (
 	"github.com/corruptmemory/file-uploader-r3/internal/auth"
 	"github.com/corruptmemory/file-uploader-r3/internal/csv"
 	"github.com/corruptmemory/file-uploader-r3/internal/mock"
+	"github.com/corruptmemory/file-uploader-r3/internal/setup"
 )
 
 //go:embed testdata/static
@@ -527,5 +528,69 @@ func TestSecurityHeadersPresent(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("%s = %q, want %q", tt.header, got, tt.want)
 		}
+	}
+}
+
+func TestRedirectToSetupWhenInSetupState(t *testing.T) {
+	// Create application in SetupApp state
+	builder := func(a *app.Application) (app.Stoppable, error) {
+		runningBuilder := func(a *app.Application) (app.Stoppable, error) {
+			return &stubRunningApp{stopCh: make(chan struct{})}, nil
+		}
+		configWriter := func(ac app.ApplicationConfig) error { return nil }
+		return setup.NewSetupApp(a, app.ApplicationConfig{}, &mock.MockAuthProvider{}, configWriter, runningBuilder, ""), nil
+	}
+	application := app.NewApplication(builder)
+	defer func() {
+		application.Stop()
+		application.Wait()
+	}()
+
+	authProvider := &mock.MockAuthProvider{}
+	_, router := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// GET / should redirect to /setup
+	resp, err := client.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
+	}
+	location := resp.Header.Get("Location")
+	if location != "/setup" {
+		t.Errorf("Location = %q, want %q", location, "/setup")
+	}
+
+	// GET /login should also redirect to /setup
+	resp, err = client.Get(ts.URL + "/login")
+	if err != nil {
+		t.Fatalf("GET /login: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("login redirect: status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
+	}
+
+	// GET /setup should work (200)
+	resp, err = client.Get(ts.URL + "/setup")
+	if err != nil {
+		t.Fatalf("GET /setup: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("setup page: status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
