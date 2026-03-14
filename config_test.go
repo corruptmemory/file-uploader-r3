@@ -74,8 +74,8 @@ func TestLoadConfigMissingFileNotError(t *testing.T) {
 	}
 
 	// Should get defaults
-	if cfg.Address != "127.0.0.1" {
-		t.Errorf("Address = %q, want %q", cfg.Address, "127.0.0.1")
+	if cfg.Address != "0.0.0.0" {
+		t.Errorf("Address = %q, want %q", cfg.Address, "0.0.0.0")
 	}
 	if cfg.Port != 8080 {
 		t.Errorf("Port = %d, want %d", cfg.Port, 8080)
@@ -257,8 +257,8 @@ func TestGenConfigOutputsValidTOML(t *testing.T) {
 	}
 
 	// Verify defaults
-	if parsed.Address != "127.0.0.1" {
-		t.Errorf("Address = %q, want %q", parsed.Address, "127.0.0.1")
+	if parsed.Address != "0.0.0.0" {
+		t.Errorf("Address = %q, want %q", parsed.Address, "0.0.0.0")
 	}
 	if parsed.Port != 8080 {
 		t.Errorf("Port = %d, want %d", parsed.Port, 8080)

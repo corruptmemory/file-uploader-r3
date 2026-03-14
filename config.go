@@ -50,7 +50,7 @@ type DataProcessingConfig struct {
 func DefaultConfig() Config {
 	return Config{
 		APIEndpoint:        "",
-		Address:            "127.0.0.1",
+		Address:            "0.0.0.0",
 		Port:               8080,
 		Prefix:             "",
 		SigningKey:         "",

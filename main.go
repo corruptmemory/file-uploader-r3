@@ -144,6 +144,11 @@ func main() {
 	var authProvider app.AuthProvider
 	if args.Mock {
 		authProvider = &mock.MockAuthProvider{}
+	} else if appCfg.NeedsSetup() {
+		// During setup, use the mock auth provider as a placeholder. The setup wizard
+		// needs an AuthProvider for the registration code step; the real provider will
+		// be configured after setup completes.
+		authProvider = &mock.MockAuthProvider{}
 	} else {
 		log.Fatal("Non-mock mode requires a real auth provider. Use --mock for development or implement a real AuthProvider.")
 	}

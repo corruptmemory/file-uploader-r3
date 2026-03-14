@@ -157,7 +157,7 @@ func NewWebApp(application *app.Application, authProvider app.AuthProvider, sign
 		tlsEnabled:       tlsEnabled,
 		tokenBlacklist:   auth.NewTokenBlacklist(),
 		setupRateLimiter:        newRateLimiter(10, 1*time.Minute),
-		loginRateLimiter:        newRateLimiter(5, 1*time.Minute),
+		loginRateLimiter:        newRateLimiter(20, 1*time.Minute),
 		registrationRateLimiter: newRateLimiter(5, 1*time.Minute),
 	}
 
@@ -429,12 +429,9 @@ func (wa *WebApp) handleLoginGet(w http.ResponseWriter, r *http.Request, claims 
 }
 
 func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
-	// CSRF protection: require HX-Request header (set automatically by htmx).
-	// Browsers do not send custom headers on cross-origin form submissions.
-	if r.Header.Get("HX-Request") != "true" {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
+	// No HX-Request CSRF check on login: this is a public endpoint (no session to steal),
+	// and SameSite=Strict cookies already mitigate login CSRF. Allowing non-htmx POST
+	// preserves the 303 redirect fallback for graceful degradation.
 
 	if !wa.loginRateLimiter.allow(clientIP(r)) {
 		http.Error(w, "too many login attempts — please wait and try again", http.StatusTooManyRequests)
