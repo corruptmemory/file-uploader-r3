@@ -6,8 +6,10 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/corruptmemory/file-uploader-r3/internal/app"
@@ -18,33 +20,106 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+// rateLimiter tracks request timestamps per IP for simple rate limiting.
+type rateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string][]time.Time
+	maxReqs  int
+	window   time.Duration
+}
+
+// newRateLimiter creates a rate limiter allowing maxReqs requests per window per IP.
+func newRateLimiter(maxReqs int, window time.Duration) *rateLimiter {
+	return &rateLimiter{
+		attempts: make(map[string][]time.Time),
+		maxReqs:  maxReqs,
+		window:   window,
+	}
+}
+
+// allow checks whether the given IP is within the rate limit. It records the
+// attempt and evicts stale entries.
+func (rl *rateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-rl.window)
+
+	// Evict old entries for this IP
+	times := rl.attempts[ip]
+	valid := times[:0]
+	for _, t := range times {
+		if t.After(cutoff) {
+			valid = append(valid, t)
+		}
+	}
+
+	if len(valid) >= rl.maxReqs {
+		rl.attempts[ip] = valid
+		return false
+	}
+
+	rl.attempts[ip] = append(valid, now)
+
+	// Periodically clean up other IPs (every 100th call)
+	if len(rl.attempts) > 100 {
+		for k, v := range rl.attempts {
+			filtered := v[:0]
+			for _, t := range v {
+				if t.After(cutoff) {
+					filtered = append(filtered, t)
+				}
+			}
+			if len(filtered) == 0 {
+				delete(rl.attempts, k)
+			} else {
+				rl.attempts[k] = filtered
+			}
+		}
+	}
+
+	return true
+}
+
+// clientIP extracts the client IP from a request, stripping the port.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // maxUploadSize is the maximum allowed upload size (50 MB).
 const maxUploadSize = 50 << 20 // 50 MB
 
 // WebApp registers all HTTP routes and handles requests.
 type WebApp struct {
-	app            *app.Application
-	authProvider   app.AuthProvider
-	signingKey     []byte
-	uploadDir      string
-	version        string
-	prefix         string
-	tlsEnabled     bool
-	tokenBlacklist *auth.TokenBlacklist
+	app              *app.Application
+	authProvider     app.AuthProvider
+	signingKey       []byte
+	uploadDir        string
+	version          string
+	prefix           string
+	tlsEnabled       bool
+	tokenBlacklist   *auth.TokenBlacklist
+	setupRateLimiter *rateLimiter
 }
 
 // NewWebApp creates a WebApp and registers routes on a new chi.Router.
 // staticFS should be an fs.FS rooted at the directory containing js/, css/, img/.
 func NewWebApp(application *app.Application, authProvider app.AuthProvider, signingKey []byte, uploadDir, version, prefix string, staticFS fs.FS, tlsEnabled bool) (*WebApp, chi.Router) {
 	wa := &WebApp{
-		app:            application,
-		authProvider:   authProvider,
-		signingKey:     signingKey,
-		uploadDir:      uploadDir,
-		version:        version,
-		prefix:         prefix,
-		tlsEnabled:     tlsEnabled,
-		tokenBlacklist: auth.NewTokenBlacklist(),
+		app:              application,
+		authProvider:     authProvider,
+		signingKey:       signingKey,
+		uploadDir:        uploadDir,
+		version:          version,
+		prefix:           prefix,
+		tlsEnabled:       tlsEnabled,
+		tokenBlacklist:   auth.NewTokenBlacklist(),
+		setupRateLimiter: newRateLimiter(10, 1*time.Minute),
 	}
 
 	r := chi.NewRouter()
@@ -69,7 +144,7 @@ func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -105,7 +180,7 @@ func (wa *WebApp) registerRoutes(r chi.Router, staticFS fs.FS) {
 	r.Group(func(sub chi.Router) {
 		sub.Get("/login", wa.withRunningState(wa.withStateOptionalSession(wa.handleLoginGet)))
 		sub.Post("/login", wa.withRunningState(wa.handleLoginPost))
-		sub.Get("/logout", wa.withRunningState(wa.handleLogout))
+		sub.Post("/logout", wa.withRunningState(wa.handleLogout))
 	})
 
 	// Authenticated routes — require session + RunningApp
@@ -431,6 +506,19 @@ func (wa *WebApp) handleSetupGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (wa *WebApp) handleSetupPost(w http.ResponseWriter, r *http.Request) {
+	// CSRF protection: require HX-Request header (set automatically by htmx).
+	// Browsers do not send custom headers on cross-origin form submissions.
+	if r.Header.Get("HX-Request") != "true" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Rate limiting on setup POST endpoints
+	if !wa.setupRateLimiter.allow(clientIP(r)) {
+		http.Error(w, "too many requests — please wait and try again", http.StatusTooManyRequests)
+		return
+	}
+
 	action := chi.URLParam(r, "action")
 
 	sa, err := wa.getSetupApp()

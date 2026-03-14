@@ -406,20 +406,20 @@ func stepPlayerIDHasher(info *setup.StepInfo, prefix string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "\" hx-target=\"#wizard-content\" hx-swap=\"innerHTML\"><input type=\"hidden\" name=\"current_step\" value=\"3\"><div class=\"form-group\"><label for=\"pepper\">Pepper</label> <input type=\"text\" id=\"pepper\" name=\"pepper\" value=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "\" hx-target=\"#wizard-content\" hx-swap=\"innerHTML\"><input type=\"hidden\" name=\"current_step\" value=\"3\"><div class=\"form-group\"><label for=\"pepper\">Pepper</label> <input type=\"password\" id=\"pepper\" name=\"pepper\" value=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var20 string
 		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(info.Pepper)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/pages/setupsteps.templ`, Line: 100, Col: 68}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/pages/setupsteps.templ`, Line: 100, Col: 72}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "\" required minlength=\"5\"> <small>Minimum 5 characters. Used for hashing player IDs.</small></div><div class=\"form-group\"><label for=\"hash_algorithm\">Hash Algorithm</label> <input type=\"text\" id=\"hash_algorithm\" name=\"hash_algorithm\" value=\"argon2\" readonly></div><div class=\"setup-actions\"><button type=\"button\" class=\"btn btn-secondary\" hx-post=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "\" required minlength=\"5\" autocomplete=\"off\"> <small>Minimum 5 characters. Used for hashing player IDs.</small></div><div class=\"form-group\"><label for=\"hash_algorithm\">Hash Algorithm</label> <input type=\"text\" id=\"hash_algorithm\" name=\"hash_algorithm\" value=\"argon2\" readonly></div><div class=\"setup-actions\"><button type=\"button\" class=\"btn btn-secondary\" hx-post=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

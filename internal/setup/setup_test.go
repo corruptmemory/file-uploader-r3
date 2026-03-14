@@ -450,6 +450,138 @@ func TestStateTransitionOnDone(t *testing.T) {
 	waitForRunningApp(t, application, 2*time.Second)
 }
 
+func TestValidateEndpointURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid https URL",
+			url:     "https://api.example.com",
+			wantErr: false,
+		},
+		{
+			name:    "valid http URL",
+			url:     "http://api.example.com",
+			wantErr: false,
+		},
+		{
+			name:    "ftp scheme rejected",
+			url:     "ftp://files.example.com",
+			wantErr: true,
+			errMsg:  "URL must use http or https scheme",
+		},
+		{
+			name:    "no scheme rejected",
+			url:     "api.example.com",
+			wantErr: true,
+			errMsg:  "URL must use http or https scheme",
+		},
+		{
+			name:    "empty hostname rejected",
+			url:     "https://",
+			wantErr: true,
+			errMsg:  "URL must have a valid hostname",
+		},
+		{
+			name:    "localhost rejected",
+			url:     "https://localhost",
+			wantErr: true,
+			errMsg:  "URL must not point to a private or internal address",
+		},
+		{
+			name:    "127.0.0.1 rejected",
+			url:     "https://127.0.0.1",
+			wantErr: true,
+			errMsg:  "URL must not point to a private or internal address",
+		},
+		{
+			name:    "10.x.x.x rejected",
+			url:     "https://10.0.0.1",
+			wantErr: true,
+			errMsg:  "URL must not point to a private or internal address",
+		},
+		{
+			name:    "172.16.x.x rejected",
+			url:     "https://172.16.0.1",
+			wantErr: true,
+			errMsg:  "URL must not point to a private or internal address",
+		},
+		{
+			name:    "192.168.x.x rejected",
+			url:     "https://192.168.1.1",
+			wantErr: true,
+			errMsg:  "URL must not point to a private or internal address",
+		},
+		{
+			name:    "169.254.x.x rejected",
+			url:     "https://169.254.169.254",
+			wantErr: true,
+			errMsg:  "URL must not point to a private or internal address",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEndpointURL(tt.url)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("validateEndpointURL(%q) = nil, want error", tt.url)
+				} else if err.Error() != tt.errMsg {
+					t.Errorf("validateEndpointURL(%q) error = %q, want %q", tt.url, err.Error(), tt.errMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("validateEndpointURL(%q) = %v, want nil", tt.url, err)
+				}
+			}
+		})
+	}
+}
+
+func TestEndpointURLValidationInWizard(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		env      string
+		wantErr  string
+	}{
+		{
+			name:     "ftp scheme",
+			endpoint: "ftp://files.example.com",
+			env:      "staging",
+			wantErr:  "Invalid endpoint URL: URL must use http or https scheme",
+		},
+		{
+			name:     "private IP 127.0.0.1",
+			endpoint: "https://127.0.0.1",
+			env:      "staging",
+			wantErr:  "Invalid endpoint URL: URL must not point to a private or internal address",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sa, _ := newTestSetupApp(t)
+			sa.GetServiceEndpoint()
+
+			info, err := sa.SetServiceEndpoint(tt.endpoint, tt.env)
+			if err != nil {
+				t.Fatalf("SetServiceEndpoint: %v", err)
+			}
+			if info.CurrentStep() != app.StepEndpoint {
+				t.Errorf("step = %d, want %d", info.CurrentStep(), app.StepEndpoint)
+			}
+			si := info.(*StepInfo)
+			if si.ErrorMsg != tt.wantErr {
+				t.Errorf("error = %q, want %q", si.ErrorMsg, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestEndpointValidation(t *testing.T) {
 	tests := []struct {
 		name     string

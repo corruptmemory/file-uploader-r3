@@ -97,7 +97,7 @@ templ stepPlayerIDHasher(info *setup.StepInfo, prefix string) {
 			<input type="hidden" name="current_step" value="3"/>
 			<div class="form-group">
 				<label for="pepper">Pepper</label>
-				<input type="text" id="pepper" name="pepper" value={ info.Pepper } required minlength="5"/>
+				<input type="password" id="pepper" name="pepper" value={ info.Pepper } required minlength="5" autocomplete="off"/>
 				<small>Minimum 5 characters. Used for hashing player IDs.</small>
 			</div>
 			<div class="form-group">

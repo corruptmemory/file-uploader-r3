@@ -2,11 +2,79 @@ package setup
 
 import (
 	"fmt"
+	"log"
+	"net"
+	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/corruptmemory/file-uploader-r3/internal/app"
 	"github.com/corruptmemory/file-uploader-r3/internal/chanutil"
 )
+
+// validateEndpointURL validates that the endpoint URL has a proper scheme,
+// a valid hostname, and does not resolve to a private/internal IP address.
+func validateEndpointURL(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("invalid URL")
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("URL must use http or https scheme")
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("URL must have a valid hostname")
+	}
+
+	// Resolve the hostname to IP addresses and check for private ranges
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		// If we can't resolve, allow it — the endpoint test later will catch connectivity issues
+		return nil
+	}
+
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if isPrivateIP(ip) {
+			return fmt.Errorf("URL must not point to a private or internal address")
+		}
+	}
+
+	return nil
+}
+
+// isPrivateIP checks whether an IP address belongs to a private or reserved range.
+func isPrivateIP(ip net.IP) bool {
+	privateRanges := []struct {
+		network string
+	}{
+		{"127.0.0.0/8"},
+		{"10.0.0.0/8"},
+		{"172.16.0.0/12"},
+		{"192.168.0.0/16"},
+		{"169.254.0.0/16"},
+		{"::1/128"},
+		{"fc00::/7"},
+	}
+
+	for _, r := range privateRanges {
+		_, cidr, err := net.ParseCIDR(r.network)
+		if err != nil {
+			continue
+		}
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
 
 // --- Step Info ---
 
@@ -372,6 +440,15 @@ func handleEndpointToCredentials(cmd command, s *actorState) app.SetupStepInfo {
 		}
 	}
 
+	if err := validateEndpointURL(endpoint); err != nil {
+		return &StepInfo{
+			Step:        app.StepEndpoint,
+			Endpoint:    endpoint,
+			Environment: env,
+			ErrorMsg:    fmt.Sprintf("Invalid endpoint URL: %s", err.Error()),
+		}
+	}
+
 	s.endpoint = endpoint
 	s.environment = env
 	s.currentStep = app.StepServiceCredentials
@@ -389,17 +466,19 @@ func handleCredentialsToHasher(cmd command, s *actorState) app.SetupStepInfo {
 
 	apiClient, err := s.authProvider.ConsumeRegistrationCode(s.endpoint, code)
 	if err != nil {
+		log.Printf("Registration failed for endpoint %q: %v", s.endpoint, err)
 		return &StepInfo{
 			Step:     app.StepServiceCredentials,
-			ErrorMsg: fmt.Sprintf("Registration failed: %s", err.Error()),
+			ErrorMsg: "Registration failed — please check your code and try again",
 		}
 	}
 
 	// Test the endpoint
 	if err := apiClient.TestEndpoint(); err != nil {
+		log.Printf("Endpoint test failed for %q: %v", s.endpoint, err)
 		return &StepInfo{
 			Step:     app.StepServiceCredentials,
-			ErrorMsg: fmt.Sprintf("Endpoint unreachable: %s", err.Error()),
+			ErrorMsg: "Could not reach the service endpoint — please verify the URL",
 		}
 	}
 
@@ -469,19 +548,21 @@ func handlePlayersDBToDoneNoTransition(cmd command, s *actorState) app.SetupStep
 
 	// Validate
 	if err := config.ValidateSettableValues(nil); err != nil {
+		log.Printf("Configuration validation failed: %v", err)
 		s.currentStep = app.StepError
 		return &StepInfo{
 			Step:     app.StepError,
-			ErrorMsg: fmt.Sprintf("Configuration validation failed: %s", err.Error()),
+			ErrorMsg: "Configuration validation failed — please contact your administrator",
 		}
 	}
 
 	// Write config
 	if err := s.configWriter(config); err != nil {
+		log.Printf("Failed to write config: %v", err)
 		s.currentStep = app.StepError
 		return &StepInfo{
 			Step:     app.StepError,
-			ErrorMsg: fmt.Sprintf("Failed to write config: %s", err.Error()),
+			ErrorMsg: "Failed to save configuration — please contact your administrator",
 		}
 	}
 

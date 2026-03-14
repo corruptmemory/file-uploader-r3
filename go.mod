@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/a-h/templ v0.3.1001
 	github.com/dimchansky/utfbom v1.1.1
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/gocarina/gocsv v0.0.0-20240520201108-78e41c74b4b1
@@ -14,7 +15,4 @@ require (
 	golang.org/x/text v0.35.0
 )
 
-require (
-	github.com/a-h/templ v0.3.1001 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-)
+require golang.org/x/sys v0.42.0 // indirect

@@ -472,12 +472,12 @@ func TestSessionReplayAfterLogout(t *testing.T) {
 		t.Fatalf("dashboard before logout: status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 
-	// Perform logout
-	logoutReq, _ := http.NewRequest("GET", ts.URL+"/logout", nil)
+	// Perform logout (POST)
+	logoutReq, _ := http.NewRequest("POST", ts.URL+"/logout", nil)
 	logoutReq.AddCookie(sessionCookie)
 	logoutResp, err := client.Do(logoutReq)
 	if err != nil {
-		t.Fatalf("GET /logout: %v", err)
+		t.Fatalf("POST /logout: %v", err)
 	}
 	logoutResp.Body.Close()
 
@@ -520,7 +520,7 @@ func TestSecurityHeadersPresent(t *testing.T) {
 	}{
 		{"X-Frame-Options", "DENY"},
 		{"X-Content-Type-Options", "nosniff"},
-		{"Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"},
+		{"Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"},
 	}
 
 	for _, tt := range tests {
@@ -528,6 +528,159 @@ func TestSecurityHeadersPresent(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("%s = %q, want %q", tt.header, got, tt.want)
 		}
+	}
+}
+
+func TestLogoutRequiresPost(t *testing.T) {
+	ts, cleanup := newTestWebApp(t)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// GET /logout should return 405 Method Not Allowed
+	req, _ := http.NewRequest("GET", ts.URL+"/logout", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /logout: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("GET /logout: status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+	}
+
+	// POST /logout should work (redirect to login)
+	req, _ = http.NewRequest("POST", ts.URL+"/logout", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /logout: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("POST /logout: status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
+	}
+}
+
+func TestSetupPostRequiresHXRequestHeader(t *testing.T) {
+	// Create application in SetupApp state
+	builder := func(a *app.Application) (app.Stoppable, error) {
+		runningBuilder := func(a *app.Application) (app.Stoppable, error) {
+			return &stubRunningApp{stopCh: make(chan struct{})}, nil
+		}
+		configWriter := func(ac app.ApplicationConfig) error { return nil }
+		return setup.NewSetupApp(a, app.ApplicationConfig{}, &mock.MockAuthProvider{}, configWriter, runningBuilder, ""), nil
+	}
+	application := app.NewApplication(builder)
+	defer func() {
+		application.Stop()
+		application.Wait()
+	}()
+
+	authProvider := &mock.MockAuthProvider{}
+	_, router := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// POST without HX-Request header should return 403
+	req, _ := http.NewRequest("POST", ts.URL+"/setup/next", strings.NewReader("current_step=0"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /setup/next without HX-Request: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+
+	// POST with HX-Request header should work (200)
+	req, _ = http.NewRequest("POST", ts.URL+"/setup/next", strings.NewReader("current_step=0"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /setup/next with HX-Request: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestSetupPostRateLimiting(t *testing.T) {
+	// Create application in SetupApp state
+	builder := func(a *app.Application) (app.Stoppable, error) {
+		runningBuilder := func(a *app.Application) (app.Stoppable, error) {
+			return &stubRunningApp{stopCh: make(chan struct{})}, nil
+		}
+		configWriter := func(ac app.ApplicationConfig) error { return nil }
+		return setup.NewSetupApp(a, app.ApplicationConfig{}, &mock.MockAuthProvider{}, configWriter, runningBuilder, ""), nil
+	}
+	application := app.NewApplication(builder)
+	defer func() {
+		application.Stop()
+		application.Wait()
+	}()
+
+	authProvider := &mock.MockAuthProvider{}
+	_, router := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// Send 10 requests (should all succeed)
+	for i := 0; i < 10; i++ {
+		req, _ := http.NewRequest("POST", ts.URL+"/setup/next", strings.NewReader("current_step=0"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("HX-Request", "true")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("request %d: status = %d, want %d", i, resp.StatusCode, http.StatusOK)
+		}
+	}
+
+	// 11th request should be rate limited
+	req, _ := http.NewRequest("POST", ts.URL+"/setup/next", strings.NewReader("current_step=0"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("rate limited request: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("rate limited: status = %d, want %d", resp.StatusCode, http.StatusTooManyRequests)
 	}
 }
 
