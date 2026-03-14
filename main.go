@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/corruptmemory/file-uploader-r3/internal/app"
-	"github.com/corruptmemory/file-uploader-r3/internal/csv"
 	"github.com/corruptmemory/file-uploader-r3/internal/mock"
 	"github.com/corruptmemory/file-uploader-r3/internal/server"
 	"github.com/corruptmemory/file-uploader-r3/internal/setup"
@@ -155,18 +153,41 @@ func main() {
 
 	// Determine initial state
 	var initialStateBuilder app.StateBuilder
+	configWriter := cfg.WriteFile(args.ConfigFile)
 	if args.Mock || !appCfg.NeedsSetup() {
-		// Mock mode or fully configured: start directly in RunningApp
+		// Mock mode: fill in default values for settable fields so the
+		// settings page isn't blank (setup wizard is skipped in mock mode).
+		if args.Mock && appCfg.NeedsSetup() {
+			if appCfg.Endpoint == "" {
+				appCfg = appCfg.WithEndpoint("http://localhost:8080/api")
+			}
+			if appCfg.Environment == "" {
+				appCfg = appCfg.WithEnvironment("mock")
+			}
+			if appCfg.ServiceCredentials == "" {
+				appCfg = appCfg.WithServiceCredentials("mock-credentials")
+			}
+			if appCfg.OrgPlayerIDPepper == "" {
+				appCfg = appCfg.WithOrgPlayerIDPepper("mock-pepper-value")
+			}
+			if appCfg.OrgPlayerIDHash == "" {
+				appCfg = appCfg.WithOrgPlayerIDHash("argon2")
+			}
+			if appCfg.UsePlayersDB == "" {
+				appCfg = appCfg.WithUsePlayersDB("false")
+			}
+		}
+		capturedCfg := appCfg
 		initialStateBuilder = func(a *app.Application) (app.Stoppable, error) {
-			// RunningApp will be fully implemented in later specs.
-			// For now, return a placeholder that satisfies RunningApp.
-			return newPlaceholderRunningApp(), nil
+			uploader := mock.NewMockUploader(args.MockOutDir, mock.WithDelay(100*time.Millisecond))
+			return app.NewRunningApp(capturedCfg, uploader, authProvider, configWriter)
 		}
 	} else {
 		// Needs setup: start in SetupApp
-		configWriter := cfg.WriteFile(args.ConfigFile)
 		runningAppBuilder := func(a *app.Application) (app.Stoppable, error) {
-			return newPlaceholderRunningApp(), nil
+			updatedCfg := cfg.ToApplicationConfig()
+			uploader := mock.NewMockUploader(args.MockOutDir, mock.WithDelay(100*time.Millisecond))
+			return app.NewRunningApp(updatedCfg, uploader, authProvider, configWriter)
 		}
 		capturedCfg := appCfg
 		initialStateBuilder = func(a *app.Application) (app.Stoppable, error) {
@@ -216,96 +237,3 @@ func main() {
 	application.Wait()
 	log.Println("Shutdown complete")
 }
-
-// --- Placeholder RunningApp ---
-
-type placeholderRunningApp struct {
-	stopCh chan struct{}
-}
-
-func newPlaceholderRunningApp() *placeholderRunningApp {
-	return &placeholderRunningApp{stopCh: make(chan struct{})}
-}
-
-func (p *placeholderRunningApp) Stop() {
-	select {
-	case <-p.stopCh:
-	default:
-		close(p.stopCh)
-	}
-}
-
-func (p *placeholderRunningApp) Wait() { <-p.stopCh }
-func (p *placeholderRunningApp) Subscribe() (*app.EventSubscription, error) {
-	ch := make(chan app.DataUpdateEvent, 1)
-	// Send initial empty state
-	ch <- app.DataUpdateEvent{State: app.CSVProcessingState{}}
-	return &app.EventSubscription{
-		ID:     fmt.Sprintf("placeholder-%d", time.Now().UnixNano()),
-		Events: ch,
-	}, nil
-}
-func (p *placeholderRunningApp) Unsubscribe(id string) error { return nil }
-func (p *placeholderRunningApp) ProcessUploadedCSVFile(uploadedBy, originalFilename, localFilePath string) error {
-	return nil
-}
-func (p *placeholderRunningApp) GetFinishedDetails(recordID string) (*app.CSVFinishedFile, error) {
-	return nil, fmt.Errorf("not found: %s", recordID)
-}
-func (p *placeholderRunningApp) GetState() (*app.RunningState, error) { return nil, nil }
-func (p *placeholderRunningApp) SearchFinished(status app.FinishedStatus, csvTypes []csv.CSVType, search string) ([]app.CSVFinishedFile, error) {
-	return nil, nil
-}
-func (p *placeholderRunningApp) GetConfig() (app.ApplicationConfig, error) {
-	return app.ApplicationConfig{}, nil
-}
-func (p *placeholderRunningApp) MFARequired() (bool, error) { return false, nil }
-func (p *placeholderRunningApp) UpdateConfig(config app.ApplicationConfig) error {
-	return nil
-}
-func (p *placeholderRunningApp) DownloadPlayersDB(orgPlayerHash, orgPlayerIDPepper string, response http.ResponseWriter) error {
-	return nil
-}
-
-var _ app.RunningApp = (*placeholderRunningApp)(nil)
-
-// --- Placeholder SetupApp ---
-
-type placeholderSetupApp struct {
-	stopCh chan struct{}
-}
-
-func newPlaceholderSetupApp() *placeholderSetupApp {
-	return &placeholderSetupApp{stopCh: make(chan struct{})}
-}
-
-func (p *placeholderSetupApp) Stop() {
-	select {
-	case <-p.stopCh:
-	default:
-		close(p.stopCh)
-	}
-}
-
-func (p *placeholderSetupApp) Wait() { <-p.stopCh }
-func (p *placeholderSetupApp) GoBackFrom(step app.SetupStepNumber) (app.SetupStepInfo, error) {
-	return nil, nil
-}
-func (p *placeholderSetupApp) GetCurrentState() (app.SetupStepInfo, error) { return nil, nil }
-func (p *placeholderSetupApp) GetServiceEndpoint() (app.SetupStepInfo, error) {
-	return nil, nil
-}
-func (p *placeholderSetupApp) SetServiceEndpoint(endpoint, env string) (app.SetupStepInfo, error) {
-	return nil, nil
-}
-func (p *placeholderSetupApp) UseRegistrationCode(code string) (app.SetupStepInfo, error) {
-	return nil, nil
-}
-func (p *placeholderSetupApp) SetPlayerIDHasher(pepper, hash string) (app.SetupStepInfo, error) {
-	return nil, nil
-}
-func (p *placeholderSetupApp) SetUsePlayerDB(usePlayersDB bool) (app.SetupStepInfo, error) {
-	return nil, nil
-}
-
-var _ app.SetupApp = (*placeholderSetupApp)(nil)

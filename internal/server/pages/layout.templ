@@ -19,7 +19,7 @@ templ Layout(prefix string, activePage string) {
 					<li><a href={ templ.SafeURL(prefix + "/archived") } class={ templ.KV("active", activePage == "archived") }>Archive</a></li>
 					<li><a href={ templ.SafeURL(prefix + "/settings") } class={ templ.KV("active", activePage == "settings") }>Settings</a></li>
 					<li><a href={ templ.SafeURL(prefix + "/players-db") } class={ templ.KV("active", activePage == "players-db") }>Players DB</a></li>
-					<li><form method="POST" action={ templ.SafeURL(prefix + "/logout") } class="navbar-logout-form"><button type="submit" class="btn-logout">Logout</button></form></li>
+					<li><a href={ templ.SafeURL(prefix + "/logout") } class="btn-logout">Logout</a></li>
 				</ul>
 			</div>
 		</nav>

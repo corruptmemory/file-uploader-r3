@@ -68,7 +68,7 @@
             var remaining = checkSession();
             if (remaining <= 0) {
                 clearInterval(sessionTimerInterval);
-                fetch(getPrefix() + "/logout", { method: "POST", credentials: "same-origin" })
+                fetch(getPrefix() + "/logout", { method: "GET", credentials: "same-origin" })
                     .finally(function() { window.location.href = getPrefix() + "/login?expired=1"; });
                 return;
             }

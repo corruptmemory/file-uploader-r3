@@ -233,7 +233,7 @@ func (wa *WebApp) registerRoutes(r chi.Router, staticFS fs.FS) {
 	r.Group(func(sub chi.Router) {
 		sub.Get("/login", wa.withRunningState(wa.withStateOptionalSession(wa.handleLoginGet)))
 		sub.Post("/login", wa.withRunningState(wa.handleLoginPost))
-		sub.Post("/logout", wa.withRunningState(wa.handleLogout))
+		sub.Get("/logout", wa.withRunningState(wa.handleLogout))
 	})
 
 	// Authenticated routes — require session + RunningApp

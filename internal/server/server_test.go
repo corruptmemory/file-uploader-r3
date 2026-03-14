@@ -645,13 +645,12 @@ func TestSessionReplayAfterLogout(t *testing.T) {
 		t.Fatalf("dashboard before logout: status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 
-	// Perform logout (POST)
-	logoutReq, _ := http.NewRequest("POST", ts.URL+"/logout", nil)
-	logoutReq.Header.Set("HX-Request", "true")
+	// Perform logout (GET per spec 11)
+	logoutReq, _ := http.NewRequest("GET", ts.URL+"/logout", nil)
 	logoutReq.AddCookie(sessionCookie)
 	logoutResp, err := client.Do(logoutReq)
 	if err != nil {
-		t.Fatalf("POST /logout: %v", err)
+		t.Fatalf("GET /logout: %v", err)
 	}
 	logoutResp.Body.Close()
 
@@ -705,7 +704,7 @@ func TestSecurityHeadersPresent(t *testing.T) {
 	}
 }
 
-func TestLogoutRequiresPost(t *testing.T) {
+func TestLogoutUsesGet(t *testing.T) {
 	ts, cleanup := newTestWebApp(t)
 	defer cleanup()
 
@@ -717,7 +716,7 @@ func TestLogoutRequiresPost(t *testing.T) {
 		},
 	}
 
-	// GET /logout should return 405 Method Not Allowed
+	// GET /logout should work (redirect to login) per spec 11
 	req, _ := http.NewRequest("GET", ts.URL+"/logout", nil)
 	for _, c := range cookies {
 		req.AddCookie(c)
@@ -728,24 +727,8 @@ func TestLogoutRequiresPost(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("GET /logout: status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
-	}
-
-	// POST /logout should work (redirect to login)
-	req, _ = http.NewRequest("POST", ts.URL+"/logout", nil)
-	req.Header.Set("HX-Request", "true")
-	for _, c := range cookies {
-		req.AddCookie(c)
-	}
-	resp, err = client.Do(req)
-	if err != nil {
-		t.Fatalf("POST /logout: %v", err)
-	}
-	resp.Body.Close()
-
 	if resp.StatusCode != http.StatusSeeOther {
-		t.Errorf("POST /logout: status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
+		t.Errorf("GET /logout: status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
 	}
 }
 
@@ -1938,14 +1921,13 @@ func TestLogoutClearsCookies(t *testing.T) {
 
 	cookies := loginAndGetCookies(t, ts)
 
-	req, _ := http.NewRequest("POST", ts.URL+"/logout", nil)
-	req.Header.Set("HX-Request", "true")
+	req, _ := http.NewRequest("GET", ts.URL+"/logout", nil)
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
 	resp, err := noRedirectClient.Do(req)
 	if err != nil {
-		t.Fatalf("POST /logout: %v", err)
+		t.Fatalf("GET /logout: %v", err)
 	}
 	resp.Body.Close()
 
