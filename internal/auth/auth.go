@@ -98,8 +98,8 @@ func (b *TokenBlacklist) Close() {
 func generateJTI() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp-based ID if crypto/rand fails
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		// crypto/rand failure means the system CSPRNG is broken — no safe recovery.
+		panic("crypto/rand failed: " + err.Error())
 	}
 	return hex.EncodeToString(b)
 }

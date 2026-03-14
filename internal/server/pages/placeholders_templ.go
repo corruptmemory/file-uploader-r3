@@ -482,20 +482,20 @@ func SettingsPage(prefix string, data SettingsData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "\" hx-target=\"#reg-code-result\" hx-swap=\"innerHTML\"><div class=\"form-group\"><label for=\"registration_code\">Registration Code</label> <input type=\"text\" id=\"registration_code\" name=\"registration_code\" required> <small>Submit a new registration code to update service credentials.</small></div><button type=\"submit\" class=\"btn btn-primary btn-sm\">Submit Code</button></form><div id=\"reg-code-result\"></div></div><!-- Player ID Hasher + Use Players DB (main settings form) --><form method=\"POST\" action=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "\" hx-target=\"#reg-code-result\" hx-swap=\"innerHTML\"><div class=\"form-group\"><label for=\"registration_code\">Registration Code</label> <input type=\"text\" id=\"registration_code\" name=\"registration_code\" required> <small>Submit a new registration code to update service credentials.</small></div><button type=\"submit\" class=\"btn btn-primary btn-sm\">Submit Code</button></form><div id=\"reg-code-result\"></div></div><!-- Player ID Hasher + Use Players DB (main settings form) --><form hx-post=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var27 templ.SafeURL
-			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(prefix + "/settings"))
+			var templ_7745c5c3_Var27 string
+			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(prefix + "/settings")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/pages/placeholders.templ`, Line: 159, Col: 67}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/pages/placeholders.templ`, Line: 159, Col: 39}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\"><div class=\"settings-section\"><h3>Player ID Hasher</h3><div class=\"form-group\"><label for=\"pepper\">Pepper</label> <input type=\"text\" id=\"pepper\" name=\"pepper\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\" hx-target=\"body\" hx-swap=\"innerHTML\"><div class=\"settings-section\"><h3>Player ID Hasher</h3><div class=\"form-group\"><label for=\"pepper\">Pepper</label> <input type=\"text\" id=\"pepper\" name=\"pepper\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

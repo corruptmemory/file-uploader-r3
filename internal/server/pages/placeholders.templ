@@ -156,7 +156,7 @@ templ SettingsPage(prefix string, data SettingsData) {
 				<div id="reg-code-result"></div>
 			</div>
 			<!-- Player ID Hasher + Use Players DB (main settings form) -->
-			<form method="POST" action={ templ.SafeURL(prefix + "/settings") }>
+			<form hx-post={ prefix + "/settings" } hx-target="body" hx-swap="innerHTML">
 				<div class="settings-section">
 					<h3>Player ID Hasher</h3>
 					<div class="form-group">

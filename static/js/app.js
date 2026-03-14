@@ -69,7 +69,7 @@
             if (remaining <= 0) {
                 clearInterval(sessionTimerInterval);
                 fetch(getPrefix() + "/logout", { method: "POST", credentials: "same-origin" })
-                    .finally(function() { window.location.href = getPrefix() + "/login"; });
+                    .finally(function() { window.location.href = getPrefix() + "/login?expired=1"; });
                 return;
             }
             if (remaining <= 30) {
@@ -244,7 +244,8 @@
             fetch(getPrefix() + "/upload", {
                 method: "POST",
                 body: formData,
-                credentials: "same-origin"
+                credentials: "same-origin",
+                headers: { "HX-Request": "true" }
             }).then(function(response) {
                 return response.text().then(function(text) {
                     if (response.ok) {

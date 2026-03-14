@@ -257,6 +257,7 @@ func TestUploadEnforces50MBLimit(t *testing.T) {
 
 	req, _ := http.NewRequest("POST", ts.URL+"/upload", &buf)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -1351,6 +1352,7 @@ func TestArchiveFiltersByStatus(t *testing.T) {
 	req, _ := http.NewRequest("POST", ts.URL+"/search-archived",
 		strings.NewReader("status=failure"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -1384,6 +1386,7 @@ func TestArchiveFiltersByType(t *testing.T) {
 	req, _ := http.NewRequest("POST", ts.URL+"/search-archived",
 		strings.NewReader("csv_type=players"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -1417,6 +1420,7 @@ func TestArchiveTextSearch(t *testing.T) {
 	req, _ := http.NewRequest("POST", ts.URL+"/search-archived",
 		strings.NewReader("search=test"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -1571,6 +1575,7 @@ func TestSettingsValidationError(t *testing.T) {
 	req, _ := http.NewRequest("POST", ts.URL+"/settings",
 		strings.NewReader("pepper=ab&use_players_db=true"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -1608,6 +1613,7 @@ func TestSettingsSaveSuccess(t *testing.T) {
 	req, _ := http.NewRequest("POST", ts.URL+"/settings",
 		strings.NewReader("pepper=new-valid-pepper&use_players_db=false"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -1650,6 +1656,7 @@ func TestRegistrationCode(t *testing.T) {
 	req, _ := http.NewRequest("POST", ts.URL+"/settings/registration",
 		strings.NewReader("registration_code=test-code-123"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}

@@ -517,12 +517,9 @@ func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (wa *WebApp) handleLogout(w http.ResponseWriter, r *http.Request) {
-	// CSRF protection: require HX-Request header (set automatically by htmx).
-	// Defense-in-depth alongside SameSite=Strict cookies.
-	if r.Header.Get("HX-Request") != "true" {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
+	// No HX-Request check for logout: SameSite=Strict cookies prevent CSRF,
+	// and logout must work from both the navbar form (plain POST) and the
+	// JS auto-logout (plain fetch). Worst case of a CSRF logout is benign.
 
 	// Revoke the current token before clearing cookies
 	cookie, err := r.Cookie("session")
@@ -542,6 +539,12 @@ func (wa *WebApp) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (wa *WebApp) handleUpload(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	// CSRF defense-in-depth: require HX-Request header alongside SameSite=Strict cookies.
+	if r.Header.Get("HX-Request") != "true" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	// Enforce 50MB limit
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
@@ -763,6 +766,12 @@ func (wa *WebApp) handleSettingsGet(w http.ResponseWriter, r *http.Request, clai
 }
 
 func (wa *WebApp) handleSettingsPost(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	// CSRF defense-in-depth: require HX-Request header alongside SameSite=Strict cookies.
+	if r.Header.Get("HX-Request") != "true" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	ra, err := wa.getRunningApp()
 	if err != nil {
 		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
@@ -821,6 +830,12 @@ func (wa *WebApp) handleSettingsPost(w http.ResponseWriter, r *http.Request, cla
 }
 
 func (wa *WebApp) handleRegistrationCode(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	// CSRF defense-in-depth: require HX-Request header alongside SameSite=Strict cookies.
+	if r.Header.Get("HX-Request") != "true" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	if !wa.registrationRateLimiter.allow(clientIP(r)) {
 		http.Error(w, "too many registration attempts — please wait and try again", http.StatusTooManyRequests)
 		return
@@ -926,6 +941,12 @@ func (wa *WebApp) handleArchived(w http.ResponseWriter, r *http.Request, claims 
 }
 
 func (wa *WebApp) handleSearchArchived(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	// CSRF defense-in-depth: require HX-Request header alongside SameSite=Strict cookies.
+	if r.Header.Get("HX-Request") != "true" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	ra, err := wa.getRunningApp()
 	if err != nil {
 		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
