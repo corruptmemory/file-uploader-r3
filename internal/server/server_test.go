@@ -190,6 +190,7 @@ func loginAndGetCookies(t *testing.T, ts *httptest.Server) []*http.Cookie {
 	formData := "username=testuser&password=testpass"
 	req, _ := http.NewRequest("POST", ts.URL+"/login", strings.NewReader(formData))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
 
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -202,8 +203,9 @@ func loginAndGetCookies(t *testing.T, ts *httptest.Server) []*http.Cookie {
 	}
 	resp.Body.Close()
 
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("login status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
+	// With HX-Request header, login returns 200 with HX-Redirect instead of 303
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 	return resp.Cookies()
 }
@@ -1067,6 +1069,7 @@ func TestFailureDetailsReturnsHTML(t *testing.T) {
 	formData := "username=testuser&password=testpass"
 	loginReq, _ := http.NewRequest("POST", ts.URL+"/login", strings.NewReader(formData))
 	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginReq.Header.Set("HX-Request", "true")
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse

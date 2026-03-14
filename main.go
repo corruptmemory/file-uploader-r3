@@ -28,6 +28,7 @@ type Args struct {
 	Port           int    `short:"p" long:"port" description:"Listen port"`
 	Prefix         string `short:"P" long:"prefix" description:"URL prefix"`
 	SigningKeyFile string `short:"s" long:"signing-key-file" description:"Path to file containing JWT signing key"`
+	SecureCookies  bool   `long:"secure-cookies" description:"Set Secure flag on cookies (enable behind TLS-terminating proxy)"`
 	Mock           bool   `long:"mock" description:"Use mock implementations"`
 	MockOutDir     string `long:"mock-output-dir" description:"Mock upload output directory" default:"./mock-output"`
 
@@ -137,10 +138,7 @@ func main() {
 	if args.Mock {
 		authProvider = &mock.MockAuthProvider{}
 	} else {
-		// Real auth provider will be wired when RunningApp is fully implemented.
-		// For now, use mock in all modes since there's no real provider yet.
-		authProvider = &mock.MockAuthProvider{}
-		log.Println("WARNING: Using mock auth provider in non-mock mode — all credentials will be accepted")
+		log.Fatal("Non-mock mode requires a real auth provider. Use --mock for development or implement a real AuthProvider.")
 	}
 
 	// Determine initial state
@@ -175,7 +173,7 @@ func main() {
 
 	// Create WebApp and chi router
 	listenAddr := fmt.Sprintf("%s:%d", cfg.Address, cfg.Port)
-	_, router := server.NewWebApp(application, authProvider, signingKey, appCfg.CSVUploadDir, GitVersion, cfg.Prefix, staticSub, false)
+	_, router := server.NewWebApp(application, authProvider, signingKey, appCfg.CSVUploadDir, GitVersion, cfg.Prefix, staticSub, args.SecureCookies)
 
 	// Create and start Server
 	srv := server.NewServer(listenAddr, router, nil)

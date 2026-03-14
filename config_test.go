@@ -74,8 +74,8 @@ func TestLoadConfigMissingFileNotError(t *testing.T) {
 	}
 
 	// Should get defaults
-	if cfg.Address != "0.0.0.0" {
-		t.Errorf("Address = %q, want %q", cfg.Address, "0.0.0.0")
+	if cfg.Address != "127.0.0.1" {
+		t.Errorf("Address = %q, want %q", cfg.Address, "127.0.0.1")
 	}
 	if cfg.Port != 8080 {
 		t.Errorf("Port = %d, want %d", cfg.Port, 8080)
@@ -257,8 +257,8 @@ func TestGenConfigOutputsValidTOML(t *testing.T) {
 	}
 
 	// Verify defaults
-	if parsed.Address != "0.0.0.0" {
-		t.Errorf("Address = %q, want %q", parsed.Address, "0.0.0.0")
+	if parsed.Address != "127.0.0.1" {
+		t.Errorf("Address = %q, want %q", parsed.Address, "127.0.0.1")
 	}
 	if parsed.Port != 8080 {
 		t.Errorf("Port = %d, want %d", parsed.Port, 8080)
@@ -278,13 +278,13 @@ func TestValidateServerFields(t *testing.T) {
 		port    int
 		wantErr bool
 	}{
-		{"valid", "0.0.0.0", 8080, false},
+		{"valid", "127.0.0.1", 8080, false},
 		{"valid loopback", "127.0.0.1", 443, false},
 		{"valid ipv6", "::1", 8080, false},
 		{"invalid address", "not-an-ip", 8080, true},
-		{"port too low", "0.0.0.0", 0, true},
-		{"port too high", "0.0.0.0", 65536, true},
-		{"port negative", "0.0.0.0", -1, true},
+		{"port too low", "127.0.0.1", 0, true},
+		{"port too high", "127.0.0.1", 65536, true},
+		{"port negative", "127.0.0.1", -1, true},
 	}
 
 	for _, tt := range tests {

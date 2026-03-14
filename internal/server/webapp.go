@@ -138,8 +138,9 @@ type WebApp struct {
 	prefix           string
 	tlsEnabled       bool
 	tokenBlacklist   *auth.TokenBlacklist
-	setupRateLimiter *rateLimiter
-	loginRateLimiter *rateLimiter
+	setupRateLimiter        *rateLimiter
+	loginRateLimiter        *rateLimiter
+	registrationRateLimiter *rateLimiter
 }
 
 // NewWebApp creates a WebApp and registers routes on a new chi.Router.
@@ -154,8 +155,9 @@ func NewWebApp(application *app.Application, authProvider app.AuthProvider, sign
 		prefix:           prefix,
 		tlsEnabled:       tlsEnabled,
 		tokenBlacklist:   auth.NewTokenBlacklist(),
-		setupRateLimiter: newRateLimiter(10, 1*time.Minute),
-		loginRateLimiter: newRateLimiter(5, 1*time.Minute),
+		setupRateLimiter:        newRateLimiter(10, 1*time.Minute),
+		loginRateLimiter:        newRateLimiter(5, 1*time.Minute),
+		registrationRateLimiter: newRateLimiter(5, 1*time.Minute),
 	}
 
 	r := chi.NewRouter()
@@ -425,6 +427,13 @@ func (wa *WebApp) handleLoginGet(w http.ResponseWriter, r *http.Request, claims 
 }
 
 func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
+	// CSRF protection: require HX-Request header (set automatically by htmx).
+	// Browsers do not send custom headers on cross-origin form submissions.
+	if r.Header.Get("HX-Request") != "true" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	if !wa.loginRateLimiter.allow(clientIP(r)) {
 		http.Error(w, "too many login attempts — please wait and try again", http.StatusTooManyRequests)
 		return
@@ -450,6 +459,20 @@ func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		})
 		component.Render(r.Context(), w)
 		return
+	}
+
+	// Reject usernames containing control characters
+	for _, c := range username {
+		if c < 0x20 || c == 0x7f {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			component := pages.LoginForm(wa.prefix, pages.LoginFormData{
+				NeedsMFA: needsMFA,
+				Error:    "Username contains invalid characters",
+			})
+			component.Render(r.Context(), w)
+			return
+		}
 	}
 
 	// Authenticate via the AuthProvider
@@ -787,6 +810,11 @@ func (wa *WebApp) handleSettingsPost(w http.ResponseWriter, r *http.Request, cla
 }
 
 func (wa *WebApp) handleRegistrationCode(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	if !wa.registrationRateLimiter.allow(clientIP(r)) {
+		http.Error(w, "too many registration attempts — please wait and try again", http.StatusTooManyRequests)
+		return
+	}
+
 	ra, err := wa.getRunningApp()
 	if err != nil {
 		http.Error(w, "application unavailable", http.StatusServiceUnavailable)

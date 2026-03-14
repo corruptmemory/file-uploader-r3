@@ -27,6 +27,10 @@ func NewServer(addr string, handler http.Handler, tlsConfig *tls.Config) *Server
 			Handler:           handler,
 			TLSConfig:         tlsConfig,
 			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			// WriteTimeout intentionally omitted: SSE connections are long-lived
+			// and a global WriteTimeout would kill active event streams.
 		},
 		addr:      addr,
 		tlsConfig: tlsConfig,
