@@ -646,6 +646,7 @@ func TestSessionReplayAfterLogout(t *testing.T) {
 
 	// Perform logout (POST)
 	logoutReq, _ := http.NewRequest("POST", ts.URL+"/logout", nil)
+	logoutReq.Header.Set("HX-Request", "true")
 	logoutReq.AddCookie(sessionCookie)
 	logoutResp, err := client.Do(logoutReq)
 	if err != nil {
@@ -732,6 +733,7 @@ func TestLogoutRequiresPost(t *testing.T) {
 
 	// POST /logout should work (redirect to login)
 	req, _ = http.NewRequest("POST", ts.URL+"/logout", nil)
+	req.Header.Set("HX-Request", "true")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -1930,6 +1932,7 @@ func TestLogoutClearsCookies(t *testing.T) {
 	cookies := loginAndGetCookies(t, ts)
 
 	req, _ := http.NewRequest("POST", ts.URL+"/logout", nil)
+	req.Header.Set("HX-Request", "true")
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}

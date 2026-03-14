@@ -388,9 +388,18 @@ func TestDBDirName(t *testing.T) {
 	if !strings.HasPrefix(name, "playersdb-argon2-") {
 		t.Fatalf("unexpected dir name: %s", name)
 	}
-	// Verify no padding characters.
-	if strings.Contains(name, "=") {
-		t.Fatalf("dir name should use RawURLEncoding (no padding): %s", name)
+	// Verify the suffix is a hex hash (not the raw pepper).
+	suffix := strings.TrimPrefix(name, "playersdb-argon2-")
+	if len(suffix) != 16 {
+		t.Fatalf("expected 16-char hex hash suffix, got %q (len %d)", suffix, len(suffix))
+	}
+	// Same pepper must produce the same directory name.
+	if name2 := DBDirName("argon2", "somepepper"); name2 != name {
+		t.Fatalf("DBDirName not deterministic: %q != %q", name, name2)
+	}
+	// Different pepper must produce a different directory name.
+	if name3 := DBDirName("argon2", "otherpepper"); name3 == name {
+		t.Fatal("different peppers should produce different dir names")
 	}
 }
 

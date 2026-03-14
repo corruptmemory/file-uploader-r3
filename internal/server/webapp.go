@@ -79,20 +79,21 @@ func (rl *rateLimiter) run() {
 
 			attempts[cmd.ip] = append(valid, now)
 
-			// Periodically clean up other IPs
-			if len(attempts) > 100 {
-				for k, v := range attempts {
-					filtered := v[:0]
-					for _, t := range v {
-						if t.After(cutoff) {
-							filtered = append(filtered, t)
-						}
+			// Clean up stale entries for all IPs every request
+			for k, v := range attempts {
+				if k == cmd.ip {
+					continue // already cleaned above
+				}
+				filtered := v[:0]
+				for _, t := range v {
+					if t.After(cutoff) {
+						filtered = append(filtered, t)
 					}
-					if len(filtered) == 0 {
-						delete(attempts, k)
-					} else {
-						attempts[k] = filtered
-					}
+				}
+				if len(filtered) == 0 {
+					delete(attempts, k)
+				} else {
+					attempts[k] = filtered
 				}
 			}
 
@@ -516,6 +517,13 @@ func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (wa *WebApp) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// CSRF protection: require HX-Request header (set automatically by htmx).
+	// Defense-in-depth alongside SameSite=Strict cookies.
+	if r.Header.Get("HX-Request") != "true" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	// Revoke the current token before clearing cookies
 	cookie, err := r.Cookie("session")
 	if err == nil {
@@ -691,7 +699,10 @@ func (wa *WebApp) handleExtendSession(w http.ResponseWriter, r *http.Request, cl
 		return
 	}
 
-	// Within window — issue new token
+	// Within window — issue new token and revoke the old one
+	if claims.JTI != "" {
+		wa.tokenBlacklist.Revoke(claims.JTI, time.Unix(claims.Exp, 0))
+	}
 	newClaims := auth.NewClaims(claims.Username, claims.OrgID)
 	tokenStr, err := auth.CreateToken(newClaims, wa.signingKey)
 	if err != nil {

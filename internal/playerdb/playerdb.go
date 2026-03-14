@@ -3,7 +3,6 @@ package playerdb
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -249,9 +248,12 @@ func LoadDB(filePath string, pepper string) (*memDB, error) {
 // --- Directory Naming ---
 
 // DBDirName returns the directory name for a player database.
+// Uses a truncated SHA-256 hash of the pepper (not the raw pepper) so the
+// pepper cannot be recovered from the directory name.
 func DBDirName(algorithm, pepper string) string {
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(pepper))
-	return fmt.Sprintf("playersdb-%s-%s", algorithm, encoded)
+	h := sha256.Sum256([]byte(pepper))
+	truncated := fmt.Sprintf("%x", h[:8]) // 16 hex chars, sufficient for uniqueness
+	return fmt.Sprintf("playersdb-%s-%s", algorithm, truncated)
 }
 
 // --- Snapshot ---
