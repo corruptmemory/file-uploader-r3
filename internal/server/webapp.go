@@ -1,17 +1,22 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"fmt"
-	"html"
 	"io"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/corruptmemory/file-uploader-r3/internal/app"
 	"github.com/corruptmemory/file-uploader-r3/internal/auth"
 	"github.com/corruptmemory/file-uploader-r3/internal/server/pages"
@@ -313,9 +318,41 @@ func (wa *WebApp) handleHealth(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "ok")
 }
 
+func (wa *WebApp) getRunningApp() (app.RunningApp, error) {
+	state, err := wa.app.GetState()
+	if err != nil {
+		return nil, err
+	}
+	ra, ok := state.(app.RunningApp)
+	if !ok {
+		return nil, fmt.Errorf("not in running state")
+	}
+	return ra, nil
+}
+
 func (wa *WebApp) handleDashboard(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	runState, err := ra.GetState()
+	if err != nil {
+		http.Error(w, "failed to get state", http.StatusInternalServerError)
+		return
+	}
+
+	var processingState app.CSVProcessingState
+	if runState != nil {
+		processingState = runState.DataProcessing
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, "<html><body><h1>Dashboard</h1><p>Welcome, %s</p></body></html>", html.EscapeString(claims.Username))
+	component := pages.DashboardFullPage(wa.prefix, processingState)
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("dashboard render error: %v", err)
+	}
 }
 
 func (wa *WebApp) handleLoginGet(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
@@ -329,7 +366,10 @@ func (wa *WebApp) handleLoginGet(w http.ResponseWriter, r *http.Request, claims 
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, `<html><body><h1>Login</h1><form method="POST"><input name="username" placeholder="Username"><input name="password" type="password" placeholder="Password"><button type="submit">Login</button></form></body></html>`)
+	component := pages.LoginPage(wa.prefix, "")
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("login page render error: %v", err)
+	}
 }
 
 func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
@@ -395,17 +435,143 @@ func (wa *WebApp) handleUpload(w http.ResponseWriter, r *http.Request, claims *a
 		return
 	}
 
-	// Placeholder — actual file handling comes in later specs
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, "upload received")
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<div class="alert alert-danger">No files selected.</div>`)
+		return
+	}
+
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<div class="alert alert-danger">Application unavailable.</div>`)
+		return
+	}
+
+	var uploaded []string
+	var errors []string
+
+	for _, fh := range files {
+		if !strings.HasSuffix(strings.ToLower(fh.Filename), ".csv") {
+			errors = append(errors, fmt.Sprintf("%s: not a CSV file", fh.Filename))
+			continue
+		}
+
+		src, err := fh.Open()
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("%s: failed to open", fh.Filename))
+			continue
+		}
+
+		// Sanitize filename and create unique local path
+		sanitized := sanitizeFilename(fh.Filename)
+		localName := fmt.Sprintf("%d-%s", time.Now().UnixNano(), sanitized)
+		localPath := filepath.Join(wa.uploadDir, localName)
+
+		dst, err := os.Create(localPath)
+		if err != nil {
+			src.Close()
+			errors = append(errors, fmt.Sprintf("%s: failed to save", fh.Filename))
+			continue
+		}
+
+		_, copyErr := io.Copy(dst, src)
+		src.Close()
+		dst.Close()
+
+		if copyErr != nil {
+			os.Remove(localPath)
+			errors = append(errors, fmt.Sprintf("%s: failed to save", fh.Filename))
+			continue
+		}
+
+		if err := ra.ProcessUploadedCSVFile(claims.Username, fh.Filename, localPath); err != nil {
+			os.Remove(localPath)
+			errors = append(errors, fmt.Sprintf("%s: %s", fh.Filename, err.Error()))
+			continue
+		}
+
+		uploaded = append(uploaded, fh.Filename)
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	if len(errors) > 0 {
+		fmt.Fprintf(w, `<div class="alert alert-danger">Errors: %s</div>`, strings.Join(errors, "; "))
+	}
+	if len(uploaded) > 0 {
+		fmt.Fprintf(w, `<div class="alert alert-success">Uploaded: %s</div>`, strings.Join(uploaded, ", "))
+	}
+}
+
+// sanitizeFilename removes path separators and other unsafe characters from a filename.
+func sanitizeFilename(name string) string {
+	name = filepath.Base(name)
+	name = strings.ReplaceAll(name, "..", "")
+	name = strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == '\x00' {
+			return '_'
+		}
+		return r
+	}, name)
+	if name == "" || name == "." {
+		name = "upload.csv"
+	}
+	return name
 }
 
 func (wa *WebApp) handleEvents(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
-	// SSE placeholder
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	sub, err := ra.Subscribe()
+	if err != nil || sub == nil {
+		http.Error(w, "failed to subscribe", http.StatusInternalServerError)
+		return
+	}
+	defer ra.Unsubscribe(sub.ID)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	fmt.Fprint(w, "data: {\"status\":\"connected\"}\n\n")
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-sub.Events:
+			if !ok {
+				return
+			}
+			wa.writeSSEEvent(w, ctx, "queued", pages.QueuedTable(event.State.QueuedFiles))
+			wa.writeSSEEvent(w, ctx, "processing", pages.ProcessingDisplay(event.State.ProcessingFile))
+			wa.writeSSEEvent(w, ctx, "uploading", pages.UploadingTable(event.State.UploadingFiles))
+			wa.writeSSEEvent(w, ctx, "recently-finished", pages.RecentlyFinishedTable(wa.prefix, event.State.FinishedFiles))
+			flusher.Flush()
+		}
+	}
+}
+
+// writeSSEEvent renders a templ component to a single-line string and writes it as a named SSE event.
+func (wa *WebApp) writeSSEEvent(w http.ResponseWriter, ctx context.Context, eventName string, component templ.Component) {
+	var buf bytes.Buffer
+	if err := component.Render(ctx, &buf); err != nil {
+		log.Printf("SSE render error for %s: %v", eventName, err)
+		return
+	}
+	line := strings.ReplaceAll(buf.String(), "\n", "")
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, line)
 }
 
 func (wa *WebApp) handleExtendSession(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
@@ -433,38 +599,75 @@ func (wa *WebApp) handleExtendSession(w http.ResponseWriter, r *http.Request, cl
 }
 
 func (wa *WebApp) handleFailureDetails(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	recordID := chi.URLParam(r, "record-id")
+	if recordID == "" {
+		http.Error(w, "missing record ID", http.StatusBadRequest)
+		return
+	}
+
+	ra, err := wa.getRunningApp()
+	if err != nil {
+		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	details, err := ra.GetFinishedDetails(recordID)
+	if err != nil {
+		http.Error(w, "record not found", http.StatusNotFound)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, "<div>Failure details placeholder</div>")
+	component := pages.FailureDetailsContent(details)
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("failure details render error: %v", err)
+	}
 }
 
 func (wa *WebApp) handleSettingsGet(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, "<html><body><h1>Settings</h1></body></html>")
+	component := pages.SettingsPage(wa.prefix)
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("settings render error: %v", err)
+	}
 }
 
 func (wa *WebApp) handleSettingsPost(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, "<html><body><h1>Settings updated</h1></body></html>")
+	component := pages.SettingsUpdatedPage(wa.prefix)
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("settings render error: %v", err)
+	}
 }
 
 func (wa *WebApp) handlePlayersDB(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, "<html><body><h1>Players Database</h1></body></html>")
+	component := pages.PlayersDBPage(wa.prefix)
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("players-db render error: %v", err)
+	}
 }
 
 func (wa *WebApp) handleDownloadPlayersDB(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	// Placeholder — download implementation comes in later specs
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprint(w, "download placeholder")
 }
 
 func (wa *WebApp) handleArchived(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, "<html><body><h1>Archived Files</h1></body></html>")
+	component := pages.ArchivedPage(wa.prefix)
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("archived render error: %v", err)
+	}
 }
 
 func (wa *WebApp) handleSearchArchived(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, "<html><body><h1>Search Results</h1></body></html>")
+	component := pages.SearchArchivedPage(wa.prefix)
+	if err := component.Render(r.Context(), w); err != nil {
+		log.Printf("search archived render error: %v", err)
+	}
 }
 
 func (wa *WebApp) getSetupApp() (app.SetupApp, error) {

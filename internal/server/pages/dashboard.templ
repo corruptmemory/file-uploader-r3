@@ -1,0 +1,55 @@
+package pages
+
+import "github.com/corruptmemory/file-uploader-r3/internal/app"
+
+templ DashboardFullPage(prefix string, state app.CSVProcessingState) {
+	@Layout(prefix, "dashboard") {
+		@DashboardPage(prefix, state)
+	}
+}
+
+templ DashboardPage(prefix string, state app.CSVProcessingState) {
+	<div hx-ext="sse" sse-connect={ prefix + "/events" }>
+		<div class="section">
+			<h2 class="section-title">Upload Files</h2>
+			<div id="drop-zone" class="drop-zone">
+				<div class="drop-zone-label">Drag and drop CSV files here, or click to select</div>
+				<input type="file" class="drop-zone-file-input" accept=".csv" multiple/>
+				<div class="drop-zone-actions">
+					<button type="button" class="btn btn-primary btn-sm drop-zone-pick-btn">Select Files</button>
+					<button type="button" class="btn btn-primary btn-sm drop-zone-upload-btn" disabled>Upload</button>
+					<button type="button" class="btn btn-secondary btn-sm drop-zone-clear-btn">Clear</button>
+				</div>
+				<div class="drop-zone-files"></div>
+				<div class="drop-zone-message" style="display:none"></div>
+			</div>
+		</div>
+
+		<div class="dashboard-grid">
+			<div class="section">
+				<h2 class="section-title">Queued Files</h2>
+				<div id="queued-table-body" sse-swap="queued">
+					@QueuedTable(state.QueuedFiles)
+				</div>
+			</div>
+			<div class="section">
+				<h2 class="section-title">Processing</h2>
+				<div id="processing-body" sse-swap="processing">
+					@ProcessingDisplay(state.ProcessingFile)
+				</div>
+			</div>
+			<div class="section">
+				<h2 class="section-title">Uploading</h2>
+				<div id="uploading-table-body" sse-swap="uploading">
+					@UploadingTable(state.UploadingFiles)
+				</div>
+			</div>
+			<div class="section">
+				<h2 class="section-title">Recently Finished</h2>
+				<div id="finished-table-body" sse-swap="recently-finished">
+					@RecentlyFinishedTable(prefix, state.FinishedFiles)
+				</div>
+			</div>
+		</div>
+	</div>
+}

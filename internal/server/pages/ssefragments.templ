@@ -1,0 +1,149 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/corruptmemory/file-uploader-r3/internal/app"
+)
+
+templ QueuedTable(files []app.FileMetadata) {
+	if len(files) == 0 {
+		<p class="empty-state">No files queued.</p>
+	} else {
+		<div class="table-wrapper">
+			<table class="data-table">
+				<thead>
+					<tr>
+						<th>Filename</th>
+						<th>Uploaded By</th>
+						<th>Time</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, f := range files {
+						<tr>
+							<td>{ f.OriginalFilename }</td>
+							<td>{ f.UploadedBy }</td>
+							<td>{ f.UploadedAt.Format("15:04:05") }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+templ ProcessingDisplay(file *app.CSVProcessingFile) {
+	if file == nil {
+		<p class="empty-state">No file being processed.</p>
+	} else {
+		<div class="card">
+			<p><strong>{ file.InFile.OriginalFilename }</strong></p>
+			<p>Type: { file.CSVType.String() }</p>
+			<p>Started: { file.StartedAt.Format("15:04:05") }</p>
+			<div class="progress-bar-container">
+				<div class="progress-bar-fill" style={ fmt.Sprintf("width: %s", fmt.Sprintf("%.0f%%", file.ProgressPercent)) }>
+					{ fmt.Sprintf("%.0f%%", file.ProgressPercent) }
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ UploadingTable(files []app.CSVUploadingFile) {
+	if len(files) == 0 {
+		<p class="empty-state">No files uploading.</p>
+	} else {
+		<div class="table-wrapper">
+			<table class="data-table">
+				<thead>
+					<tr>
+						<th>Filename</th>
+						<th>Type</th>
+						<th>Progress</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, f := range files {
+						<tr>
+							<td>{ f.InFile.OriginalFilename }</td>
+							<td>{ f.CSVType.String() }</td>
+							<td>
+								<div class="progress-bar-container">
+									<div class="progress-bar-fill" style={ fmt.Sprintf("width: %s", fmt.Sprintf("%.0f%%", f.ProgressPercent)) }>
+										{ fmt.Sprintf("%.0f%%", f.ProgressPercent) }
+									</div>
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+templ RecentlyFinishedTable(prefix string, files []app.CSVFinishedFile) {
+	if len(files) == 0 {
+		<p class="empty-state">No recently finished files.</p>
+	} else {
+		<div class="table-wrapper">
+			<table class="data-table">
+				<thead>
+					<tr>
+						<th>Filename</th>
+						<th>Type</th>
+						<th>Status</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, f := range files {
+						if f.Success {
+							<tr class="row-success">
+								<td>{ f.InFile.OriginalFilename }</td>
+								<td>{ f.CSVType.String() }</td>
+								<td><span class="badge badge-success">Success</span></td>
+							</tr>
+						} else {
+							<tr class="row-failure" style="cursor:pointer"
+								hx-get={ prefix + "/failure-details/" + f.InFile.ID }
+								hx-target="#failure-modal .failure-details"
+								hx-swap="innerHTML">
+								<td>{ f.InFile.OriginalFilename }</td>
+								<td>{ f.CSVType.String() }</td>
+								<td><span class="badge badge-failure">Failed</span></td>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+templ FailureDetailsContent(file *app.CSVFinishedFile) {
+	if file == nil {
+		<p class="empty-state">File not found.</p>
+	} else {
+		<h3>Failure Details</h3>
+		<div class="detail-row">
+			<span class="detail-label">Filename</span>
+			<span class="detail-value">{ file.InFile.OriginalFilename }</span>
+		</div>
+		<div class="detail-row">
+			<span class="detail-label">Type</span>
+			<span class="detail-value">{ file.CSVType.String() }</span>
+		</div>
+		<div class="detail-row">
+			<span class="detail-label">Uploaded By</span>
+			<span class="detail-value">{ file.InFile.UploadedBy }</span>
+		</div>
+		<div class="detail-row">
+			<span class="detail-label">Failed Phase</span>
+			<span class="detail-value">{ string(file.FailurePhase) }</span>
+		</div>
+		<div class="failure-reason">
+			<span class="detail-label">Reason</span>
+			<p>{ file.FailureReason }</p>
+		</div>
+	}
+}

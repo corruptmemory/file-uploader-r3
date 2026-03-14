@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/corruptmemory/file-uploader-r3/internal/app"
 	"github.com/corruptmemory/file-uploader-r3/internal/csv"
@@ -220,7 +221,15 @@ func (p *placeholderRunningApp) Stop() {
 }
 
 func (p *placeholderRunningApp) Wait()                                      { <-p.stopCh }
-func (p *placeholderRunningApp) Subscribe() (*app.EventSubscription, error) { return nil, nil }
+func (p *placeholderRunningApp) Subscribe() (*app.EventSubscription, error) {
+	ch := make(chan app.DataUpdateEvent, 1)
+	// Send initial empty state
+	ch <- app.DataUpdateEvent{State: app.CSVProcessingState{}}
+	return &app.EventSubscription{
+		ID:     fmt.Sprintf("placeholder-%d", time.Now().UnixNano()),
+		Events: ch,
+	}, nil
+}
 func (p *placeholderRunningApp) Unsubscribe(id string) error                { return nil }
 func (p *placeholderRunningApp) ProcessUploadedCSVFile(uploadedBy, originalFilename, localFilePath string) error {
 	return nil

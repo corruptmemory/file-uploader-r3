@@ -1,0 +1,49 @@
+package pages
+
+templ Layout(prefix string, activePage string) {
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<title>File Uploader</title>
+		<link rel="stylesheet" href={ prefix + "/css/tokens.css" }/>
+		<link rel="stylesheet" href={ prefix + "/css/app.css" }/>
+	</head>
+	<body>
+		<nav class="navbar">
+			<div class="container">
+				<a href={ templ.SafeURL(prefix + "/") } class="navbar-brand">File Uploader</a>
+				<ul class="navbar-nav">
+					<li><a href={ templ.SafeURL(prefix + "/") } class={ templ.KV("active", activePage == "dashboard") }>Dashboard</a></li>
+					<li><a href={ templ.SafeURL(prefix + "/archived") } class={ templ.KV("active", activePage == "archived") }>Archive</a></li>
+					<li><a href={ templ.SafeURL(prefix + "/settings") } class={ templ.KV("active", activePage == "settings") }>Settings</a></li>
+					<li><a href={ templ.SafeURL(prefix + "/players-db") } class={ templ.KV("active", activePage == "players-db") }>Players DB</a></li>
+					<li><a href={ templ.SafeURL(prefix + "/logout") } class="btn-logout">Logout</a></li>
+				</ul>
+			</div>
+		</nav>
+		<main class="container page-content">
+			{ children... }
+		</main>
+		<div id="session-modal" class="modal-overlay">
+			<div class="modal-content">
+				<h2>Session Expiring</h2>
+				<p>Your session is about to expire.</p>
+				<button class="btn btn-primary modal-close-btn" onclick="extendSession(); hideSessionModal();">Stay Logged In</button>
+			</div>
+		</div>
+		<div id="failure-modal" class="modal-overlay">
+			<div class="modal-content">
+				<div class="failure-details">
+					<p class="empty-state">Select a failed file to view details.</p>
+				</div>
+				<button class="btn btn-secondary modal-close-btn mt-md">Close</button>
+			</div>
+		</div>
+		<script src={ prefix + "/vendor/htmx.min.js" }></script>
+		<script src={ prefix + "/js/sse.js" }></script>
+		<script src={ prefix + "/js/app.js" }></script>
+	</body>
+	</html>
+}

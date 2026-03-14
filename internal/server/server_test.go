@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"embed"
+	"fmt"
 	"io"
 	"io/fs"
 	"mime/multipart"
@@ -42,7 +43,8 @@ func newTestApp(t *testing.T) *app.Application {
 
 // stubRunningApp is a minimal RunningApp for routing tests.
 type stubRunningApp struct {
-	stopCh chan struct{}
+	stopCh          chan struct{}
+	finishedDetails *app.CSVFinishedFile
 }
 
 func (s *stubRunningApp) Stop() {
@@ -55,12 +57,22 @@ func (s *stubRunningApp) Stop() {
 
 func (s *stubRunningApp) Wait() { <-s.stopCh }
 
-func (s *stubRunningApp) Subscribe() (*app.EventSubscription, error) { return nil, nil }
-func (s *stubRunningApp) Unsubscribe(id string) error                { return nil }
-func (s *stubRunningApp) GetFinishedDetails(id string) (*app.CSVFinishedFile, error) {
-	return nil, nil
+func (s *stubRunningApp) Subscribe() (*app.EventSubscription, error) {
+	ch := make(chan app.DataUpdateEvent, 1)
+	return &app.EventSubscription{ID: "test-sub", Events: ch}, nil
 }
-func (s *stubRunningApp) GetState() (*app.RunningState, error) { return nil, nil }
+func (s *stubRunningApp) Unsubscribe(id string) error { return nil }
+func (s *stubRunningApp) GetFinishedDetails(id string) (*app.CSVFinishedFile, error) {
+	if s.finishedDetails != nil {
+		return s.finishedDetails, nil
+	}
+	return nil, fmt.Errorf("not found")
+}
+func (s *stubRunningApp) GetState() (*app.RunningState, error) {
+	return &app.RunningState{
+		Started: time.Now(),
+	}, nil
+}
 func (s *stubRunningApp) ProcessUploadedCSVFile(uploadedBy, originalFilename, localFilePath string) error {
 	return nil
 }
@@ -745,5 +757,195 @@ func TestRedirectToSetupWhenInSetupState(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("setup page: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestSSEHandlerSetsCorrectHeaders(t *testing.T) {
+	ts, cleanup := newTestWebApp(t)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/events", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want %q", ct, "text/event-stream")
+	}
+
+	cc := resp.Header.Get("Cache-Control")
+	if cc != "no-cache" {
+		t.Errorf("Cache-Control = %q, want %q", cc, "no-cache")
+	}
+}
+
+// responseWriterNoFlusher wraps an http.ResponseWriter without implementing http.Flusher.
+type responseWriterNoFlusher struct {
+	http.ResponseWriter
+	statusCode int
+	body       bytes.Buffer
+}
+
+func (rw *responseWriterNoFlusher) WriteHeader(code int) {
+	rw.statusCode = code
+}
+
+func (rw *responseWriterNoFlusher) Write(b []byte) (int, error) {
+	return rw.body.Write(b)
+}
+
+func TestSSEReturns500WithoutFlusher(t *testing.T) {
+	// We need to test the SSE handler directly since httptest.Server always provides a Flusher.
+	application := newTestApp(t)
+	defer func() {
+		application.Stop()
+		application.Wait()
+	}()
+	authProvider := &mock.MockAuthProvider{}
+	wa, _ := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
+
+	claims := auth.NewClaims("testuser", "mock-org-001")
+	req := httptest.NewRequest("GET", "/events", nil)
+	rw := &responseWriterNoFlusher{ResponseWriter: httptest.NewRecorder()}
+
+	wa.handleEvents(rw, req, &claims)
+
+	if rw.statusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rw.statusCode, http.StatusInternalServerError)
+	}
+}
+
+func TestUploadAcceptsValidCSV(t *testing.T) {
+	ts, cleanup := newTestWebApp(t)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	part, err := writer.CreateFormFile("files", "test-data.csv")
+	if err != nil {
+		t.Fatalf("creating form file: %v", err)
+	}
+	_, _ = part.Write([]byte("header1,header2\nval1,val2\n"))
+	writer.Close()
+
+	req, _ := http.NewRequest("POST", ts.URL+"/upload", &buf)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("HX-Request", "true")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /upload: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "test-data.csv") {
+		t.Errorf("response body does not mention uploaded file: %s", string(body))
+	}
+}
+
+func TestFailureDetailsReturnsHTML(t *testing.T) {
+	// Create an app with a stub that returns failure details
+	builder := func(a *app.Application) (app.Stoppable, error) {
+		return &stubRunningApp{
+			stopCh: make(chan struct{}),
+			finishedDetails: &app.CSVFinishedFile{
+				InFile: app.FileMetadata{
+					ID:               "test-record-1",
+					OriginalFilename: "bad-file.csv",
+					UploadedBy:       "alice",
+				},
+				CSVType:       csv.CSVBets,
+				Success:       false,
+				FailurePhase:  app.FailurePhaseProcessing,
+				FailureReason: "invalid column mapping",
+			},
+		}, nil
+	}
+	application := app.NewApplication(builder)
+	defer func() {
+		application.Stop()
+		application.Wait()
+	}()
+
+	authProvider := &mock.MockAuthProvider{}
+	_, router := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	// Login
+	formData := "username=testuser&password=testpass"
+	loginReq, _ := http.NewRequest("POST", ts.URL+"/login", strings.NewReader(formData))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	loginResp, err := client.Do(loginReq)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	loginResp.Body.Close()
+	cookies := loginResp.Cookies()
+
+	req, _ := http.NewRequest("GET", ts.URL+"/failure-details/test-record-1", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /failure-details: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html*", ct)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "bad-file.csv") {
+		t.Errorf("response does not contain filename: %s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "invalid column mapping") {
+		t.Errorf("response does not contain failure reason: %s", bodyStr)
 	}
 }
