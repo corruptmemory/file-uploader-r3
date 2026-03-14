@@ -369,6 +369,9 @@ func (p *Processor) processFile(ctx context.Context, wu workUnit) {
 			os.Remove(outMeta.OutPath)
 		}
 	}
+
+	// Clean up the original uploaded file to avoid accumulating PII on disk.
+	os.Remove(wu.file.LocalFilePath)
 }
 
 // readHeaders reads the first CSV row from a csv.Reader as headers.

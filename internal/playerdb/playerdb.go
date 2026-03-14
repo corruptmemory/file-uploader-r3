@@ -226,8 +226,7 @@ func LoadDB(filePath string, pepper string) (*memDB, error) {
 	// Validate pepper.
 	expected := pepperHash(pepper)
 	if header.OrganizationPlayerIDPepperHash != expected {
-		return nil, fmt.Errorf("playerdb: pepper mismatch: expected %s, got %s",
-			expected, header.OrganizationPlayerIDPepperHash)
+		return nil, fmt.Errorf("playerdb: pepper mismatch")
 	}
 
 	db := newMemDBWithHeader(header)

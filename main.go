@@ -85,6 +85,13 @@ func main() {
 		cfg.Port = args.Port
 	}
 	if args.SigningKeyFile != "" {
+		fi, err := os.Stat(args.SigningKeyFile)
+		if err != nil {
+			log.Fatalf("Failed to stat signing key file %q: %v", args.SigningKeyFile, err)
+		}
+		if perm := fi.Mode().Perm(); perm&0077 != 0 {
+			log.Fatalf("Signing key file %q has overly permissive mode %04o; must not be group/world accessible (e.g. 0600)", args.SigningKeyFile, perm)
+		}
 		data, err := os.ReadFile(args.SigningKeyFile)
 		if err != nil {
 			log.Fatalf("Failed to read signing key file %q: %v", args.SigningKeyFile, err)

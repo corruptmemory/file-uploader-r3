@@ -495,14 +495,14 @@ func SettingsPage(prefix string, data SettingsData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\" hx-target=\"body\" hx-swap=\"innerHTML\"><div class=\"settings-section\"><h3>Player ID Hasher</h3><div class=\"form-group\"><label for=\"pepper\">Pepper</label> <input type=\"text\" id=\"pepper\" name=\"pepper\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\" hx-target=\"body\" hx-swap=\"innerHTML\"><div class=\"settings-section\"><h3>Player ID Hasher</h3><div class=\"form-group\"><label for=\"pepper\">Pepper</label> <input type=\"password\" id=\"pepper\" name=\"pepper\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var28 string
 			templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(data.Config.OrgPlayerIDPepper)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/pages/placeholders.templ`, Line: 164, Col: 88}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/pages/placeholders.templ`, Line: 164, Col: 92}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 			if templ_7745c5c3_Err != nil {

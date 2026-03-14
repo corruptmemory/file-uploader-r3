@@ -54,7 +54,7 @@ func (g *GenCSVCommand) Execute(args []string) error {
 	}
 
 	if g.Output != "" {
-		if err := os.WriteFile(g.Output, data, 0644); err != nil {
+		if err := os.WriteFile(g.Output, data, 0600); err != nil {
 			return fmt.Errorf("writing output file: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Generated %d rows of %s CSV to %s\n", g.Rows, g.Type, g.Output)

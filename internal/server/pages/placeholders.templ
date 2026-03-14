@@ -161,7 +161,7 @@ templ SettingsPage(prefix string, data SettingsData) {
 					<h3>Player ID Hasher</h3>
 					<div class="form-group">
 						<label for="pepper">Pepper</label>
-						<input type="text" id="pepper" name="pepper" value={ data.Config.OrgPlayerIDPepper } required minlength="5"/>
+						<input type="password" id="pepper" name="pepper" value={ data.Config.OrgPlayerIDPepper } required minlength="5"/>
 						if data.Errors != nil && len(data.Errors.GetPlayerIDPepperError()) > 0 {
 							for _, e := range data.Errors.GetPlayerIDPepperError() {
 								<small class="text-danger">{ e.Err.Error() }</small>
