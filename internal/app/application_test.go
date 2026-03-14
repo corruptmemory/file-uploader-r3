@@ -385,6 +385,140 @@ func TestRecoverableErrorSatisfiesErrorInterface(t *testing.T) {
 	}
 }
 
+// --- SSE subscriber tests ---
+// These test the Subscribe/Unsubscribe contract for RunningApp implementations.
+
+// mockSSERunningApp is a minimal RunningApp with SSE subscriber support.
+type mockSSERunningApp struct {
+	*mockStoppable
+	subscribers    map[string]chan DataUpdateEvent
+	subMu          sync.Mutex
+	nextID         int
+	failCounts     map[string]int // consecutive send failures per subscriber
+	maxConsecutive int            // auto-remove threshold
+}
+
+func newMockSSERunningApp() *mockSSERunningApp {
+	return &mockSSERunningApp{
+		mockStoppable:  newMockStoppable("sse-running"),
+		subscribers:    make(map[string]chan DataUpdateEvent),
+		failCounts:     make(map[string]int),
+		maxConsecutive: 10,
+	}
+}
+
+func (m *mockSSERunningApp) Subscribe() (*EventSubscription, error) {
+	m.subMu.Lock()
+	defer m.subMu.Unlock()
+	m.nextID++
+	id := fmt.Sprintf("sub-%d", m.nextID)
+	ch := make(chan DataUpdateEvent, 1)
+	m.subscribers[id] = ch
+	m.failCounts[id] = 0
+	return &EventSubscription{ID: id, Events: ch}, nil
+}
+
+func (m *mockSSERunningApp) Unsubscribe(id string) error {
+	m.subMu.Lock()
+	defer m.subMu.Unlock()
+	if ch, ok := m.subscribers[id]; ok {
+		close(ch)
+		delete(m.subscribers, id)
+		delete(m.failCounts, id)
+	}
+	return nil
+}
+
+// broadcast sends an event to all subscribers with non-blocking sends.
+// Tracks consecutive failures and auto-removes after 10 consecutive drops.
+func (m *mockSSERunningApp) broadcast(event DataUpdateEvent) {
+	m.subMu.Lock()
+	defer m.subMu.Unlock()
+	for id, ch := range m.subscribers {
+		select {
+		case ch <- event:
+			m.failCounts[id] = 0
+		default:
+			m.failCounts[id]++
+			if m.failCounts[id] >= m.maxConsecutive {
+				close(ch)
+				delete(m.subscribers, id)
+				delete(m.failCounts, id)
+			}
+		}
+	}
+}
+
+func (m *mockSSERunningApp) subscriberCount() int {
+	m.subMu.Lock()
+	defer m.subMu.Unlock()
+	return len(m.subscribers)
+}
+
+func TestSSESubscriberReceivesUpdates(t *testing.T) {
+	ra := newMockSSERunningApp()
+	defer ra.Stop()
+
+	sub, err := ra.Subscribe()
+	if err != nil {
+		t.Fatalf("Subscribe() error: %v", err)
+	}
+	defer ra.Unsubscribe(sub.ID)
+
+	// Broadcast an event.
+	event := DataUpdateEvent{State: CSVProcessingState{}}
+	ra.broadcast(event)
+
+	// Subscriber should receive the event.
+	select {
+	case got := <-sub.Events:
+		_ = got // received
+	case <-time.After(time.Second):
+		t.Fatal("SSE subscriber did not receive update within timeout")
+	}
+}
+
+func TestAutoRemoveAfter10ConsecutiveFailures(t *testing.T) {
+	ra := newMockSSERunningApp()
+	defer ra.Stop()
+
+	// Subscribe but never drain the channel (buffer size 1).
+	sub, err := ra.Subscribe()
+	if err != nil {
+		t.Fatalf("Subscribe() error: %v", err)
+	}
+
+	if ra.subscriberCount() != 1 {
+		t.Fatalf("expected 1 subscriber, got %d", ra.subscriberCount())
+	}
+
+	event := DataUpdateEvent{State: CSVProcessingState{}}
+
+	// First broadcast fills the buffer (success, no failure).
+	ra.broadcast(event)
+
+	// Now send 10 more without draining — these are consecutive failures.
+	// After 10 consecutive failures the subscriber should be auto-removed.
+	for i := 0; i < 10; i++ {
+		ra.broadcast(event)
+	}
+
+	if ra.subscriberCount() != 0 {
+		t.Fatalf("expected subscriber auto-removed after 10 consecutive failures, still have %d", ra.subscriberCount())
+	}
+
+	// Drain buffered event, then verify channel is closed.
+	// There's 1 buffered event from the first successful broadcast.
+	select {
+	case <-sub.Events:
+	default:
+	}
+	_, open := <-sub.Events
+	if open {
+		t.Fatal("expected subscriber channel to be closed after auto-remove")
+	}
+}
+
 func TestInitialBuilderNonRecoverableError(t *testing.T) {
 	app := NewApplication(func(a *Application) (Stoppable, error) {
 		return nil, fmt.Errorf("fatal boot error")

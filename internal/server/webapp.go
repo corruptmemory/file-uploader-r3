@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"html"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -76,7 +77,17 @@ func (wa *WebApp) registerRoutes(r chi.Router, staticFS fs.FS) {
 	r.Handle("/js/*", fileServer)
 	r.Handle("/css/*", fileServer)
 	r.Handle("/img/*", fileServer)
-	r.Handle("/favicon.ico", fileServer)
+	r.Handle("/vendor/*", fileServer)
+	r.Get("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		f, err := staticFS.Open("img/favicon.ico")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		w.Header().Set("Content-Type", "image/x-icon")
+		http.ServeContent(w, r, "favicon.ico", time.Time{}, f.(io.ReadSeeker))
+	})
 
 	// Health — no auth, any state
 	r.Get("/health", wa.handleHealth)

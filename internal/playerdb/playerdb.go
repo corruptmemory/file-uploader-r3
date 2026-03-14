@@ -459,6 +459,11 @@ func (c *ConcurrentPlayerDB) Save(path string) error {
 	)
 }
 
+// InnerDB returns the underlying PlayerDB for persistence purposes.
+func (c *ConcurrentPlayerDB) InnerDB() PlayerDB {
+	return c.db
+}
+
 // Close shuts down the actor goroutine and waits for it to finish.
 func (c *ConcurrentPlayerDB) Close() {
 	close(c.commands)
