@@ -2,10 +2,17 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
+	"github.com/corruptmemory/file-uploader-r3/internal/app"
+	"github.com/corruptmemory/file-uploader-r3/internal/csv"
+	"github.com/corruptmemory/file-uploader-r3/internal/server"
 	"github.com/corruptmemory/file-uploader-r3/internal/util"
 	flags "github.com/jessevdk/go-flags"
 )
@@ -81,7 +88,6 @@ func main() {
 		cfg.SigningKey = strings.TrimSpace(string(data))
 	}
 	// Address and Prefix: only override TOML when the user explicitly passed the flag.
-	// Since there's no default: tag, empty string means "not set on CLI".
 	if args.Address != "" {
 		cfg.Address = args.Address
 	}
@@ -111,7 +117,154 @@ func main() {
 		}
 	}
 
-	// Server startup (implemented in spec 11)
-	_ = appCfg
-	fmt.Println("Server startup not yet implemented")
+	// Determine signing key
+	signingKey := []byte(cfg.SigningKey)
+	if len(signingKey) == 0 {
+		// Use a default key in mock mode; require it otherwise
+		if args.Mock {
+			signingKey = []byte("mock-development-signing-key")
+		} else {
+			log.Fatal("Signing key required: set 'signing-key' in config or use --signing-key-file")
+		}
+	}
+
+	// Determine initial state
+	var initialStateBuilder app.StateBuilder
+	if args.Mock || !appCfg.NeedsSetup() {
+		// Mock mode or fully configured: start directly in RunningApp
+		initialStateBuilder = func(a *app.Application) (app.Stoppable, error) {
+			// RunningApp will be fully implemented in later specs.
+			// For now, return a placeholder that satisfies RunningApp.
+			return newPlaceholderRunningApp(), nil
+		}
+	} else {
+		// Needs setup: start in SetupApp
+		initialStateBuilder = func(a *app.Application) (app.Stoppable, error) {
+			return newPlaceholderSetupApp(), nil
+		}
+	}
+
+	// Create Application
+	application := app.NewApplication(initialStateBuilder)
+
+	// Create static FS sub-tree
+	staticSub, err := fs.Sub(StaticFS, "static")
+	if err != nil {
+		log.Fatalf("Failed to create static filesystem: %v", err)
+	}
+
+	// Create WebApp and chi router
+	listenAddr := fmt.Sprintf("%s:%d", cfg.Address, cfg.Port)
+	_, router := server.NewWebApp(application, signingKey, appCfg.CSVUploadDir, GitVersion, cfg.Prefix, staticSub)
+
+	// Create and start Server
+	srv := server.NewServer(listenAddr, router, nil)
+	if err := srv.Start(); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
+
+	log.Printf("Server listening on %s", listenAddr)
+	if cfg.Prefix != "" {
+		log.Printf("URL prefix: %s", cfg.Prefix)
+	}
+	if args.Mock {
+		log.Printf("Running in MOCK mode")
+	}
+
+	// Wait for shutdown signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	log.Println("Shutting down...")
+	srv.Stop()
+	srv.Wait()
+	application.Stop()
+	application.Wait()
+	log.Println("Shutdown complete")
 }
+
+// --- Placeholder RunningApp ---
+
+type placeholderRunningApp struct {
+	stopCh chan struct{}
+}
+
+func newPlaceholderRunningApp() *placeholderRunningApp {
+	return &placeholderRunningApp{stopCh: make(chan struct{})}
+}
+
+func (p *placeholderRunningApp) Stop() {
+	select {
+	case <-p.stopCh:
+	default:
+		close(p.stopCh)
+	}
+}
+
+func (p *placeholderRunningApp) Wait()                                     { <-p.stopCh }
+func (p *placeholderRunningApp) Subscribe() (*app.EventSubscription, error) { return nil, nil }
+func (p *placeholderRunningApp) Unsubscribe(id string) error                { return nil }
+func (p *placeholderRunningApp) ProcessUploadedCSVFile(uploadedBy, originalFilename, localFilePath string) error {
+	return nil
+}
+func (p *placeholderRunningApp) GetFinishedDetails(recordID string) (*app.CSVFinishedFile, error) {
+	return nil, nil
+}
+func (p *placeholderRunningApp) GetState() (*app.RunningState, error) { return nil, nil }
+func (p *placeholderRunningApp) SearchFinished(status app.FinishedStatus, csvTypes []csv.CSVType, search string) ([]app.CSVFinishedFile, error) {
+	return nil, nil
+}
+func (p *placeholderRunningApp) GetConfig() (app.ApplicationConfig, error) {
+	return app.ApplicationConfig{}, nil
+}
+func (p *placeholderRunningApp) MFARequired() (bool, error) { return false, nil }
+func (p *placeholderRunningApp) UpdateConfig(config app.ApplicationConfig) error {
+	return nil
+}
+func (p *placeholderRunningApp) DownloadPlayersDB(orgPlayerHash, orgPlayerIDPepper string, response http.ResponseWriter) error {
+	return nil
+}
+
+var _ app.RunningApp = (*placeholderRunningApp)(nil)
+
+// --- Placeholder SetupApp ---
+
+type placeholderSetupApp struct {
+	stopCh chan struct{}
+}
+
+func newPlaceholderSetupApp() *placeholderSetupApp {
+	return &placeholderSetupApp{stopCh: make(chan struct{})}
+}
+
+func (p *placeholderSetupApp) Stop() {
+	select {
+	case <-p.stopCh:
+	default:
+		close(p.stopCh)
+	}
+}
+
+func (p *placeholderSetupApp) Wait() { <-p.stopCh }
+func (p *placeholderSetupApp) GoBackFrom(step app.SetupStepNumber) (app.SetupStepInfo, error) {
+	return nil, nil
+}
+func (p *placeholderSetupApp) GetCurrentState() (app.SetupStepInfo, error) { return nil, nil }
+func (p *placeholderSetupApp) GetServiceEndpoint() (app.SetupStepInfo, error) {
+	return nil, nil
+}
+func (p *placeholderSetupApp) SetServiceEndpoint(endpoint, env string) (app.SetupStepInfo, error) {
+	return nil, nil
+}
+func (p *placeholderSetupApp) UseRegistrationCode(code string) (app.SetupStepInfo, error) {
+	return nil, nil
+}
+func (p *placeholderSetupApp) SetPlayerIDHasher(pepper, hash string) (app.SetupStepInfo, error) {
+	return nil, nil
+}
+func (p *placeholderSetupApp) SetUsePlayerDB(usePlayersDB bool) (app.SetupStepInfo, error) {
+	return nil, nil
+}
+
+var _ app.SetupApp = (*placeholderSetupApp)(nil)

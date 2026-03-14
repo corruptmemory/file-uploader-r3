@@ -56,7 +56,7 @@ func (a *Application) GetState() (any, error) {
 // SetState transitions to a new state. The current state is stopped and waited on
 // before the new state is created.
 func (a *Application) SetState(builder StateBuilder) error {
-	return chanutil.SendReceiveError[appCommand](a.commands, appCommand{
+	return chanutil.SendReceiveError(a.commands, appCommand{
 		kind:         cmdSetState,
 		stateBuilder: builder,
 	})
