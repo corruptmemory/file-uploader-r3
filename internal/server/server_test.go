@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,9 @@ func newTestApp(t *testing.T) *app.Application {
 type stubRunningApp struct {
 	stopCh          chan struct{}
 	finishedDetails *app.CSVFinishedFile
+	unsubMu         sync.Mutex
+	unsubscribed    bool
+	unsubscribedID  string
 }
 
 func (s *stubRunningApp) Stop() {
@@ -59,9 +63,16 @@ func (s *stubRunningApp) Wait() { <-s.stopCh }
 
 func (s *stubRunningApp) Subscribe() (*app.EventSubscription, error) {
 	ch := make(chan app.DataUpdateEvent, 1)
+	ch <- app.DataUpdateEvent{State: app.CSVProcessingState{}}
 	return &app.EventSubscription{ID: "test-sub", Events: ch}, nil
 }
-func (s *stubRunningApp) Unsubscribe(id string) error { return nil }
+func (s *stubRunningApp) Unsubscribe(id string) error {
+	s.unsubMu.Lock()
+	s.unsubscribed = true
+	s.unsubscribedID = id
+	s.unsubMu.Unlock()
+	return nil
+}
 func (s *stubRunningApp) GetFinishedDetails(id string) (*app.CSVFinishedFile, error) {
 	if s.finishedDetails != nil {
 		return s.finishedDetails, nil
@@ -178,7 +189,7 @@ func TestUploadEnforces50MBLimit(t *testing.T) {
 	// Create a multipart body larger than 50MB
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
-	part, err := writer.CreateFormFile("file", "large.csv")
+	part, err := writer.CreateFormFile("files", "large.csv")
 	if err != nil {
 		t.Fatalf("creating form file: %v", err)
 	}
@@ -947,5 +958,124 @@ func TestFailureDetailsReturnsHTML(t *testing.T) {
 	}
 	if !strings.Contains(bodyStr, "invalid column mapping") {
 		t.Errorf("response does not contain failure reason: %s", bodyStr)
+	}
+}
+
+// newTestWebAppWithStub creates a WebApp and returns the stub for direct inspection.
+func newTestWebAppWithStub(t *testing.T) (*httptest.Server, *stubRunningApp, func()) {
+	t.Helper()
+	stub := &stubRunningApp{stopCh: make(chan struct{})}
+	builder := func(a *app.Application) (app.Stoppable, error) {
+		return stub, nil
+	}
+	application := app.NewApplication(builder)
+	authProvider := &mock.MockAuthProvider{}
+	_, router := NewWebApp(application, authProvider, testSigningKey, t.TempDir(), "test-version", "", testStaticSubFS(t), false)
+	ts := httptest.NewServer(router)
+	cleanup := func() {
+		ts.Close()
+		application.Stop()
+		application.Wait()
+	}
+	return ts, stub, cleanup
+}
+
+func TestSSESendsInitialStateOnSubscribe(t *testing.T) {
+	ts, _, cleanup := newTestWebAppWithStub(t)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/events", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// Read SSE events; we expect 4 named events: queued, processing, uploading, recently-finished
+	expectedEvents := map[string]bool{
+		"queued":            false,
+		"processing":       false,
+		"uploading":        false,
+		"recently-finished": false,
+	}
+
+	buf := make([]byte, 16384)
+	n, _ := resp.Body.Read(buf)
+	body := string(buf[:n])
+
+	lines := strings.Split(body, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "event: ") {
+			eventName := strings.TrimPrefix(line, "event: ")
+			eventName = strings.TrimSpace(eventName)
+			if _, ok := expectedEvents[eventName]; ok {
+				expectedEvents[eventName] = true
+			}
+		}
+	}
+
+	for name, found := range expectedEvents {
+		if !found {
+			t.Errorf("SSE event %q was not received in initial state", name)
+		}
+	}
+}
+
+func TestSSEDisconnectTriggersUnsubscribe(t *testing.T) {
+	ts, stub, cleanup := newTestWebAppWithStub(t)
+	defer cleanup()
+
+	cookies := loginAndGetCookies(t, ts)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/events", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /events: %v", err)
+	}
+
+	// Read at least one event to confirm connection is established
+	buf := make([]byte, 16384)
+	_, _ = resp.Body.Read(buf)
+
+	// Close the response body to simulate client disconnect
+	resp.Body.Close()
+
+	// Give the server a moment to detect the disconnect and call Unsubscribe
+	time.Sleep(100 * time.Millisecond)
+
+	stub.unsubMu.Lock()
+	unsub := stub.unsubscribed
+	unsubID := stub.unsubscribedID
+	stub.unsubMu.Unlock()
+
+	if !unsub {
+		t.Error("Unsubscribe was not called after client disconnect")
+	}
+	if unsubID != "test-sub" {
+		t.Errorf("Unsubscribe ID = %q, want %q", unsubID, "test-sub")
 	}
 }

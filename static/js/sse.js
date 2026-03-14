@@ -10,7 +10,7 @@
 
     htmx.defineExtension("sse", {
         onEvent: function(name, evt) {
-            if (name === "htmx:afterProcessNode") {
+            if (name === "htmx:load") {
                 var elt = evt.detail.elt;
                 var connectUrl = elt.getAttribute("sse-connect");
                 if (!connectUrl) {

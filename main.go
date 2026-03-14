@@ -220,7 +220,7 @@ func (p *placeholderRunningApp) Stop() {
 	}
 }
 
-func (p *placeholderRunningApp) Wait()                                      { <-p.stopCh }
+func (p *placeholderRunningApp) Wait() { <-p.stopCh }
 func (p *placeholderRunningApp) Subscribe() (*app.EventSubscription, error) {
 	ch := make(chan app.DataUpdateEvent, 1)
 	// Send initial empty state
@@ -230,7 +230,7 @@ func (p *placeholderRunningApp) Subscribe() (*app.EventSubscription, error) {
 		Events: ch,
 	}, nil
 }
-func (p *placeholderRunningApp) Unsubscribe(id string) error                { return nil }
+func (p *placeholderRunningApp) Unsubscribe(id string) error { return nil }
 func (p *placeholderRunningApp) ProcessUploadedCSVFile(uploadedBy, originalFilename, localFilePath string) error {
 	return nil
 }

@@ -5,6 +5,13 @@ import (
 	"github.com/corruptmemory/file-uploader-r3/internal/app"
 )
 
+func finishedTimestamp(f app.CSVFinishedFile) string {
+	if f.UploadingFinishedAt != nil {
+		return f.UploadingFinishedAt.Format("15:04:05")
+	}
+	return f.ProcessingFinishedAt.Format("15:04:05")
+}
+
 templ QueuedTable(files []app.FileMetadata) {
 	if len(files) == 0 {
 		<p class="empty-state">No files queued.</p>
@@ -93,6 +100,7 @@ templ RecentlyFinishedTable(prefix string, files []app.CSVFinishedFile) {
 						<th>Filename</th>
 						<th>Type</th>
 						<th>Status</th>
+						<th>Finished</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -102,6 +110,7 @@ templ RecentlyFinishedTable(prefix string, files []app.CSVFinishedFile) {
 								<td>{ f.InFile.OriginalFilename }</td>
 								<td>{ f.CSVType.String() }</td>
 								<td><span class="badge badge-success">Success</span></td>
+								<td>{ finishedTimestamp(f) }</td>
 							</tr>
 						} else {
 							<tr class="row-failure" style="cursor:pointer"
@@ -111,6 +120,7 @@ templ RecentlyFinishedTable(prefix string, files []app.CSVFinishedFile) {
 								<td>{ f.InFile.OriginalFilename }</td>
 								<td>{ f.CSVType.String() }</td>
 								<td><span class="badge badge-failure">Failed</span></td>
+								<td>{ finishedTimestamp(f) }</td>
 							</tr>
 						}
 					}

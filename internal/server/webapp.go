@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"log"
@@ -453,14 +454,15 @@ func (wa *WebApp) handleUpload(w http.ResponseWriter, r *http.Request, claims *a
 	var errors []string
 
 	for _, fh := range files {
+		escapedName := html.EscapeString(fh.Filename)
 		if !strings.HasSuffix(strings.ToLower(fh.Filename), ".csv") {
-			errors = append(errors, fmt.Sprintf("%s: not a CSV file", fh.Filename))
+			errors = append(errors, fmt.Sprintf("%s: not a CSV file", escapedName))
 			continue
 		}
 
 		src, err := fh.Open()
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: failed to open", fh.Filename))
+			errors = append(errors, fmt.Sprintf("%s: failed to open", escapedName))
 			continue
 		}
 
@@ -472,7 +474,7 @@ func (wa *WebApp) handleUpload(w http.ResponseWriter, r *http.Request, claims *a
 		dst, err := os.Create(localPath)
 		if err != nil {
 			src.Close()
-			errors = append(errors, fmt.Sprintf("%s: failed to save", fh.Filename))
+			errors = append(errors, fmt.Sprintf("%s: failed to save", escapedName))
 			continue
 		}
 
@@ -482,17 +484,17 @@ func (wa *WebApp) handleUpload(w http.ResponseWriter, r *http.Request, claims *a
 
 		if copyErr != nil {
 			os.Remove(localPath)
-			errors = append(errors, fmt.Sprintf("%s: failed to save", fh.Filename))
+			errors = append(errors, fmt.Sprintf("%s: failed to save", escapedName))
 			continue
 		}
 
 		if err := ra.ProcessUploadedCSVFile(claims.Username, fh.Filename, localPath); err != nil {
 			os.Remove(localPath)
-			errors = append(errors, fmt.Sprintf("%s: %s", fh.Filename, err.Error()))
+			errors = append(errors, fmt.Sprintf("%s: %s", escapedName, html.EscapeString(err.Error())))
 			continue
 		}
 
-		uploaded = append(uploaded, fh.Filename)
+		uploaded = append(uploaded, escapedName)
 	}
 
 	w.Header().Set("Content-Type", "text/html")
