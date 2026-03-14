@@ -139,6 +139,7 @@ type WebApp struct {
 	tlsEnabled       bool
 	tokenBlacklist   *auth.TokenBlacklist
 	setupRateLimiter *rateLimiter
+	loginRateLimiter *rateLimiter
 }
 
 // NewWebApp creates a WebApp and registers routes on a new chi.Router.
@@ -154,6 +155,7 @@ func NewWebApp(application *app.Application, authProvider app.AuthProvider, sign
 		tlsEnabled:       tlsEnabled,
 		tokenBlacklist:   auth.NewTokenBlacklist(),
 		setupRateLimiter: newRateLimiter(10, 1*time.Minute),
+		loginRateLimiter: newRateLimiter(5, 1*time.Minute),
 	}
 
 	r := chi.NewRouter()
@@ -179,13 +181,26 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// noDirectoryListing wraps an http.Handler to return 404 for directory requests.
+func noDirectoryListing(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
 
 func (wa *WebApp) registerRoutes(r chi.Router, staticFS fs.FS) {
-	// Static assets — no auth, any state
-	fileServer := http.FileServer(http.FS(staticFS))
+	// Static assets — no auth, any state; directory listing disabled
+	fileServer := noDirectoryListing(http.FileServer(http.FS(staticFS)))
 	r.Handle("/js/*", fileServer)
 	r.Handle("/css/*", fileServer)
 	r.Handle("/img/*", fileServer)
@@ -410,6 +425,11 @@ func (wa *WebApp) handleLoginGet(w http.ResponseWriter, r *http.Request, claims 
 }
 
 func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
+	if !wa.loginRateLimiter.allow(clientIP(r)) {
+		http.Error(w, "too many login attempts — please wait and try again", http.StatusTooManyRequests)
+		return
+	}
+
 	username := r.FormValue("username")
 	password := r.FormValue("password")
 	mfaToken := r.FormValue("mfa_token")
@@ -533,7 +553,7 @@ func (wa *WebApp) handleUpload(w http.ResponseWriter, r *http.Request, claims *a
 		localName := fmt.Sprintf("%d-%s", time.Now().UnixNano(), sanitized)
 		localPath := filepath.Join(wa.uploadDir, localName)
 
-		dst, err := os.Create(localPath)
+		dst, err := os.OpenFile(localPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
 			src.Close()
 			errors = append(errors, fmt.Sprintf("%s: failed to save", escapedName))

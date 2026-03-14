@@ -72,7 +72,7 @@ func (m *MockRemoteAPIClient) UploadFile(csvType csv.CSVType, fileSize int64, re
 	}
 
 	outPath := filepath.Join(m.OutputDir, fmt.Sprintf("mock-upload-%s-%d.csv", csvType.Slug(), time.Now().UnixNano()))
-	outFile, err := os.Create(outPath)
+	outFile, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("mock: create output file: %w", err)
 	}
@@ -180,7 +180,7 @@ func (m *MockUploader) UploadFile(inFile app.FileMetadata, filePath string, csvT
 		}
 		defer srcFile.Close()
 
-		dstFile, err := os.Create(destPath)
+		dstFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
 			return fmt.Errorf("mock uploader: create dest: %w", err)
 		}

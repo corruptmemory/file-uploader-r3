@@ -126,6 +126,7 @@ func main() {
 		// Use a default key in mock mode; require it otherwise
 		if args.Mock {
 			signingKey = []byte("mock-development-signing-key")
+			log.Println("WARNING: Using hardcoded mock signing key — DO NOT use in production")
 		} else {
 			log.Fatal("Signing key required: set 'signing-key' in config or use --signing-key-file")
 		}
@@ -139,6 +140,7 @@ func main() {
 		// Real auth provider will be wired when RunningApp is fully implemented.
 		// For now, use mock in all modes since there's no real provider yet.
 		authProvider = &mock.MockAuthProvider{}
+		log.Println("WARNING: Using mock auth provider in non-mock mode — all credentials will be accepted")
 	}
 
 	// Determine initial state
@@ -187,6 +189,9 @@ func main() {
 	}
 	if args.Mock {
 		log.Printf("Running in MOCK mode")
+		if cfg.Address != "127.0.0.1" && cfg.Address != "localhost" && cfg.Address != "::1" && cfg.Address != "" {
+			log.Printf("WARNING: Mock mode is listening on non-localhost address %q — this is not recommended", cfg.Address)
+		}
 	}
 
 	// Wait for shutdown signal

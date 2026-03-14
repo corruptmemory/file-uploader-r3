@@ -236,8 +236,9 @@ if $do_dist; then
     # Generate starter TOML config
     echo "    Generating starter config..."
     ./file-uploader gen-config > file-uploader.toml.tmp
-    # Patch in the signing key
-    sed -i "s/^signing-key = .*/signing-key = \"${jwt_key}\"/" file-uploader.toml.tmp
+    chmod 0600 file-uploader.toml.tmp
+    # Patch in the signing key (use | delimiter to avoid conflicts with base64 characters)
+    sed -i "s|^signing-key = .*|signing-key = \"${jwt_key}\"|" file-uploader.toml.tmp
 
     # Create dist directory
     dist_name="file-uploader-${version}"
