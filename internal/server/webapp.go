@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"html"
 	"io/fs"
 	"net/http"
 	"time"
@@ -17,22 +18,24 @@ const maxUploadSize = 50 << 20 // 50 MB
 
 // WebApp registers all HTTP routes and handles requests.
 type WebApp struct {
-	app        *app.Application
-	signingKey []byte
-	uploadDir  string
-	version    string
-	prefix     string
+	app          *app.Application
+	authProvider app.AuthProvider
+	signingKey   []byte
+	uploadDir    string
+	version      string
+	prefix       string
 }
 
 // NewWebApp creates a WebApp and registers routes on a new chi.Router.
 // staticFS should be an fs.FS rooted at the directory containing js/, css/, img/.
-func NewWebApp(application *app.Application, signingKey []byte, uploadDir, version, prefix string, staticFS fs.FS) (*WebApp, chi.Router) {
+func NewWebApp(application *app.Application, authProvider app.AuthProvider, signingKey []byte, uploadDir, version, prefix string, staticFS fs.FS) (*WebApp, chi.Router) {
 	wa := &WebApp{
-		app:        application,
-		signingKey: signingKey,
-		uploadDir:  uploadDir,
-		version:    version,
-		prefix:     prefix,
+		app:          application,
+		authProvider: authProvider,
+		signingKey:   signingKey,
+		uploadDir:    uploadDir,
+		version:      version,
+		prefix:       prefix,
 	}
 
 	r := chi.NewRouter()
@@ -70,7 +73,7 @@ func (wa *WebApp) registerRoutes(r chi.Router, staticFS fs.FS) {
 
 	// Login/logout — no auth, RunningApp state
 	r.Group(func(sub chi.Router) {
-		sub.Get("/login", wa.withRunningState(wa.handleLoginGet))
+		sub.Get("/login", wa.withRunningState(wa.withStateOptionalSession(wa.handleLoginGet)))
 		sub.Post("/login", wa.withRunningState(wa.handleLoginPost))
 		sub.Get("/logout", wa.withRunningState(wa.handleLogout))
 	})
@@ -201,10 +204,19 @@ func (wa *WebApp) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (wa *WebApp) handleDashboard(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, "<html><body><h1>Dashboard</h1><p>Welcome, %s</p></body></html>", claims.Username)
+	fmt.Fprintf(w, "<html><body><h1>Dashboard</h1><p>Welcome, %s</p></body></html>", html.EscapeString(claims.Username))
 }
 
-func (wa *WebApp) handleLoginGet(w http.ResponseWriter, r *http.Request) {
+func (wa *WebApp) handleLoginGet(w http.ResponseWriter, r *http.Request, claims *auth.JWTClaims) {
+	// If user already has a valid session, redirect to dashboard
+	if claims != nil {
+		rootPath := "/"
+		if wa.prefix != "" && wa.prefix != "/" {
+			rootPath = wa.prefix + "/"
+		}
+		http.Redirect(w, r, rootPath, http.StatusSeeOther)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, `<html><body><h1>Login</h1><form method="POST"><input name="username" placeholder="Username"><input name="password" type="password" placeholder="Password"><button type="submit">Login</button></form></body></html>`)
 }
@@ -220,26 +232,15 @@ func (wa *WebApp) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get running app to access auth provider
-	state, err := wa.app.GetState()
+	// Authenticate via the AuthProvider
+	sessionToken, err := wa.authProvider.Login(username, password, mfaToken)
 	if err != nil {
-		http.Error(w, "application unavailable", http.StatusServiceUnavailable)
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, "invalid credentials")
 		return
 	}
 
-	runApp, ok := state.(app.RunningApp)
-	if !ok {
-		http.Error(w, "application not running", http.StatusServiceUnavailable)
-		return
-	}
-
-	_ = runApp
-	_ = mfaToken
-	_ = password
-
-	// For now, create a session with the provided credentials.
-	// The real auth provider integration happens when RunningApp is fully implemented.
-	claims := auth.NewClaims(username, "pending")
+	claims := auth.NewClaims(sessionToken.Username, sessionToken.OrgID)
 
 	tokenStr, err := auth.CreateToken(claims, wa.signingKey)
 	if err != nil {
@@ -354,5 +355,5 @@ func (wa *WebApp) handleSetupGet(w http.ResponseWriter, r *http.Request) {
 func (wa *WebApp) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 	action := chi.URLParam(r, "action")
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, "<html><body><h1>Setup: %s</h1></body></html>", action)
+	fmt.Fprintf(w, "<html><body><h1>Setup: %s</h1></body></html>", html.EscapeString(action))
 }

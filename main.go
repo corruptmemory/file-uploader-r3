@@ -12,6 +12,7 @@ import (
 
 	"github.com/corruptmemory/file-uploader-r3/internal/app"
 	"github.com/corruptmemory/file-uploader-r3/internal/csv"
+	"github.com/corruptmemory/file-uploader-r3/internal/mock"
 	"github.com/corruptmemory/file-uploader-r3/internal/server"
 	"github.com/corruptmemory/file-uploader-r3/internal/util"
 	flags "github.com/jessevdk/go-flags"
@@ -153,9 +154,19 @@ func main() {
 		log.Fatalf("Failed to create static filesystem: %v", err)
 	}
 
+	// Create auth provider (mock or placeholder for real — real impl comes in later specs)
+	var authProvider app.AuthProvider
+	if args.Mock {
+		authProvider = &mock.MockAuthProvider{}
+	} else {
+		// Real auth provider will be wired when RunningApp is fully implemented.
+		// For now, use mock in all modes since there's no real provider yet.
+		authProvider = &mock.MockAuthProvider{}
+	}
+
 	// Create WebApp and chi router
 	listenAddr := fmt.Sprintf("%s:%d", cfg.Address, cfg.Port)
-	_, router := server.NewWebApp(application, signingKey, appCfg.CSVUploadDir, GitVersion, cfg.Prefix, staticSub)
+	_, router := server.NewWebApp(application, authProvider, signingKey, appCfg.CSVUploadDir, GitVersion, cfg.Prefix, staticSub)
 
 	// Create and start Server
 	srv := server.NewServer(listenAddr, router, nil)
@@ -202,7 +213,7 @@ func (p *placeholderRunningApp) Stop() {
 	}
 }
 
-func (p *placeholderRunningApp) Wait()                                     { <-p.stopCh }
+func (p *placeholderRunningApp) Wait()                                      { <-p.stopCh }
 func (p *placeholderRunningApp) Subscribe() (*app.EventSubscription, error) { return nil, nil }
 func (p *placeholderRunningApp) Unsubscribe(id string) error                { return nil }
 func (p *placeholderRunningApp) ProcessUploadedCSVFile(uploadedBy, originalFilename, localFilePath string) error {
